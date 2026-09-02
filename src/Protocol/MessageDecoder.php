@@ -70,8 +70,14 @@ final class MessageDecoder
             throw new MalformedMessageException('Message missing type/id or wrong field type');
         }
 
+        $messageType = MessageType::tryFrom($data['type']);
+
+        if ($messageType === null) {
+            throw new MalformedMessageException(sprintf('Unknown message type: %s', $data['type']));
+        }
+
         $payloadArr = isset($data['payload']) && is_array($data['payload']) ? $data['payload'] : [];
 
-        return new Message($data['type'], $data['id'], $payloadArr);
+        return new Message($messageType, $data['id'], $payloadArr);
     }
 }

@@ -6,6 +6,7 @@ namespace App\Worker;
 
 use App\IPC\SocketPair;
 use App\Protocol\Message;
+use App\Protocol\MessageType;
 
 class WorkerPool
 {
@@ -58,10 +59,41 @@ class WorkerPool
         return $this->workers[$workerId]->read();
     }
 
+    /**
+     * Sends a batch of requests to the worker and blocks until a response
+     * has arrived for every request (matched by id). Returns the responses
+     * in the order they matched.
+     *
+     * @param array<string, Message> $requests map of request id => Message
+     *
+     * @return list<Message>
+     *
+     * @throws \App\Protocol\MalformedMessageException
+     */
+    public function requestBatch(int $workerId, array $requests): array
+    {
+        foreach ($requests as $request) {
+            $this->write($workerId, $request);
+        }
+
+        $expected = count($requests);
+        $responses = [];
+
+        while (count($responses) < $expected) {
+            foreach ($this->read($workerId) as $message) {
+                if (isset($requests[$message->id])) {
+                    $responses[] = $message;
+                }
+            }
+        }
+
+        return $responses;
+    }
+
     public function stop(): void
     {
         foreach ($this->workers as $worker) {
-            $worker->write(new Message('shutdown', 'shutdown-' . $worker->getPid()));
+            $worker->write(new Message(MessageType::SHUTDOWN, 'shutdown-' . $worker->getPid()));
             $worker->close();
         }
 

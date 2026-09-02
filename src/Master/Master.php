@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Master;
 
 use App\Protocol\Message;
+use App\Protocol\MessageType;
 use App\Worker\WorkerPool;
 
 final readonly class Master
@@ -19,16 +20,14 @@ final readonly class Master
 
         $workerId = $pool->get();
 
-        $pool->write($workerId, new Message('ping', 'ping-1'));
-        $pool->write($workerId, new Message('ping', 'ping-2'));
-        $pool->write($workerId, new Message('ping', 'ping-3'));
+        $responses = $pool->requestBatch($workerId, [
+            'ping-1' => new Message(MessageType::REQUEST, 'ping-1', ['data' => 'Data 1']),
+            'ping-2' => new Message(MessageType::REQUEST, 'ping-2', ['data' => 'Data 2']),
+            'ping-3' => new Message(MessageType::REQUEST, 'ping-3', ['data' => 'Data 3']),
+        ]);
 
-        $responses = 0;
-        while ($responses < 3) {
-            foreach ($pool->read($workerId) as $message) {
-                echo $message->type . ' ' . $message->id . "\n";
-                $responses++;
-            }
+        foreach ($responses as $message) {
+            echo json_encode($message) . "\n";
         }
 
         $pool->stop();

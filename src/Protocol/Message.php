@@ -7,7 +7,7 @@ namespace App\Protocol;
 final readonly class Message
 {
     public function __construct(
-        public string $type,
+        public readonly MessageType $type,
         public string $id,
         /** @var array<string, mixed> */
         public array $payload = [],
@@ -18,7 +18,7 @@ final readonly class Message
     public function toArray(): array
     {
         return [
-            'type' => $this->type,
+            'type' => $this->type->value,
             'id' => $this->id,
             'payload' => $this->payload,
         ];

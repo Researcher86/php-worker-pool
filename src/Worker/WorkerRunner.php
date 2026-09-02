@@ -6,6 +6,7 @@ namespace App\Worker;
 
 use App\IPC\Socket;
 use App\Protocol\Message;
+use App\Protocol\MessageType;
 
 final readonly class WorkerRunner
 {
@@ -20,7 +21,7 @@ final readonly class WorkerRunner
             $messages = $this->socket->read();
 
             foreach ($messages as $message) {
-                if ($message->type === 'shutdown') {
+                if ($message->type === MessageType::SHUTDOWN) {
                     $this->close();
                     return;
                 }
@@ -32,15 +33,9 @@ final readonly class WorkerRunner
 
     private function handle(Message $request): Message
     {
-        if ($request->type === 'ping') {
-            return new Message('pong', $request->id);
-        }
+        echo $request->id . "\n";
 
-        return new Message(
-            'response',
-            $request->id,
-            ['message' => 'PONG   <- Worker'],
-        );
+        return new Message(MessageType::RESPONSE, $request->id, $request->payload);
     }
 
     private function sendResponse(Message $response): void

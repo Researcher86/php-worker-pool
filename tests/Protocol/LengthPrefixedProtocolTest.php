@@ -7,6 +7,7 @@ namespace App\Tests\Protocol;
 use App\Protocol\LengthPrefixedProtocol;
 use App\Protocol\MalformedMessageException;
 use App\Protocol\Message;
+use App\Protocol\MessageType;
 use PHPUnit\Framework\TestCase;
 
 final class LengthPrefixedProtocolTest extends TestCase
@@ -20,7 +21,7 @@ final class LengthPrefixedProtocolTest extends TestCase
 
     public function testSingleMessageRoundTrip(): void
     {
-        $message = new Message('request', 'req-1', ['action' => 'calculate']);
+        $message = new Message(MessageType::REQUEST, 'req-1', ['action' => 'calculate']);
 
         $frame = $this->protocol->encode($message);
         $decoded = $this->protocol->decode($frame);
@@ -31,7 +32,7 @@ final class LengthPrefixedProtocolTest extends TestCase
 
     public function testPartialMessageAccumulatesUntilComplete(): void
     {
-        $message = new Message('request', 'req-partial', ['a' => 'b']);
+        $message = new Message(MessageType::REQUEST, 'req-partial', ['a' => 'b']);
         $frame = $this->protocol->encode($message);
 
         $half = (int) floor(strlen($frame) / 2);
@@ -47,9 +48,9 @@ final class LengthPrefixedProtocolTest extends TestCase
 
     public function testMultipleMessagesInSingleRead(): void
     {
-        $a = new Message('ping', '1');
-        $b = new Message('request', '2', ['x' => 1]);
-        $c = new Message('pong', '3');
+        $a = new Message(MessageType::REQUEST, '1');
+        $b = new Message(MessageType::REQUEST, '2', ['x' => 1]);
+        $c = new Message(MessageType::RESPONSE, '3');
 
         $combined = $this->protocol->encode($a) . $this->protocol->encode($b) . $this->protocol->encode($c);
 
@@ -61,7 +62,7 @@ final class LengthPrefixedProtocolTest extends TestCase
     public function testLargeMessage(): void
     {
         $payload = str_repeat('x', 100_000);
-        $message = new Message('request', 'large', ['data' => $payload]);
+        $message = new Message(MessageType::REQUEST, 'large', ['data' => $payload]);
 
         $frame = $this->protocol->encode($message);
 
@@ -75,7 +76,7 @@ final class LengthPrefixedProtocolTest extends TestCase
     {
         $messages = [];
         for ($i = 0; $i < 10; $i++) {
-            $messages[] = new Message('request', "req-$i", ['i' => $i]);
+            $messages[] = new Message(MessageType::REQUEST, "req-$i", ['i' => $i]);
         }
 
         $stream = '';
