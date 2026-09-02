@@ -1,8 +1,11 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Worker;
 
 use App\IPC\Socket;
+use App\Protocol\Message;
 
 final readonly class WorkerRunner
 {
@@ -14,33 +17,33 @@ final readonly class WorkerRunner
     public function run(): void
     {
         while (true) {
-            $request = $this->receiveRequest();
+            $messages = $this->socket->read();
 
-            if (str_contains($request, 'STOP')) {
-                break;
+            foreach ($messages as $message) {
+                if ($message->type === 'shutdown') {
+                    $this->close();
+                    return;
+                }
+
+                $this->sendResponse($this->handle($message));
             }
+        }
+    }
 
-            $response = $this->handle($request);
-
-            $this->sendResponse($response);
+    private function handle(Message $request): Message
+    {
+        if ($request->type === 'ping') {
+            return new Message('pong', $request->id);
         }
 
-        $this->close();
+        return new Message(
+            'response',
+            $request->id,
+            ['message' => 'PONG   <- Worker'],
+        );
     }
 
-    private function receiveRequest(): string|false
-    {
-        return $this->socket->read();
-    }
-
-    private function handle(string|false $request): string
-    {
-        echo $request;
-
-        return "PONG   <- Worker\n";
-    }
-
-    private function sendResponse(string $response): void
+    private function sendResponse(Message $response): void
     {
         $this->socket->write($response);
     }

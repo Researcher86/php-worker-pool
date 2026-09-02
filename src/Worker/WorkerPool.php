@@ -4,12 +4,12 @@ declare(ticks = 1);
 
 namespace App\Worker;
 
-use App\IPC\Socket;
 use App\IPC\SocketPair;
+use App\Protocol\Message;
 
 class WorkerPool
 {
-    /** @var array<int, Socket> */
+    /** @var array<int, WorkerProcess> */
     private array $workers = [];
 
     public function __construct(int $workerCount)
@@ -33,7 +33,7 @@ class WorkerPool
 
             $socketPair->closeWorker();
 
-            $this->workers[$pid] = $socketPair->getMasterSocket();
+            $this->workers[$pid] = new WorkerProcess($pid, $socketPair->getMasterSocket());
         }
     }
 
@@ -47,12 +47,13 @@ class WorkerPool
         return array_key_last($this->workers);
     }
 
-    public function write(int $workerId, string $data): void
+    public function write(int $workerId, Message $message): void
     {
-        $this->workers[$workerId]->write($data);
+        $this->workers[$workerId]->write($message);
     }
 
-    public function read(int $workerId): string|false
+    /** @return list<Message> */
+    public function read(int $workerId): array
     {
         return $this->workers[$workerId]->read();
     }
@@ -60,7 +61,7 @@ class WorkerPool
     public function stop(): void
     {
         foreach ($this->workers as $worker) {
-            $worker->write("STOP\n");
+            $worker->write(new Message('shutdown', 'shutdown-' . $worker->getPid()));
             $worker->close();
         }
 

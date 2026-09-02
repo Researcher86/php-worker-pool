@@ -5,6 +5,7 @@ declare(ticks = 1);
 namespace App\Tests\Worker;
 
 use App\IPC\SocketPair;
+use App\Protocol\Message;
 use App\Worker\WorkerRunner;
 use PHPUnit\Framework\TestCase;
 
@@ -36,16 +37,19 @@ final class PersistentWorkerTest extends TestCase
         $requests = 100;
 
         for ($i = 0; $i < $requests; $i++) {
-            $master->write("PING #{$i}\n");
+            $master->write(new Message('ping', "ping-$i"));
         }
 
-        for ($i = 0; $i < $requests; $i++) {
-            $response = $master->read();
-            $this->assertNotSame(false, $response, "no response for request #{$i}");
-            $this->assertStringContainsString('PONG', $response);
+        $received = 0;
+        while ($received < $requests) {
+            foreach ($master->read() as $message) {
+                $this->assertSame('pong', $message->type);
+                $this->assertSame("ping-$received", $message->id);
+                $received++;
+            }
         }
 
-        $master->write("STOP\n");
+        $master->write(new Message('shutdown', 'shutdown-1'));
         $master->close();
 
         pcntl_waitpid($pid, $status);

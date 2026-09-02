@@ -448,12 +448,12 @@ DEAD
 
 ## Tasks
 
-* [ ] Create WorkerProcess class
-* [ ] Store PID
-* [ ] Store IPC socket
-* [ ] Store worker state
-* [ ] Store current request ID
-* [ ] Implement state transitions
+* [x] Create WorkerProcess class
+* [x] Store PID
+* [x] Store IPC socket
+* [x] Store worker state
+* [x] Store current request ID
+* [x] Implement state transitions
 
 ## State Machine
 

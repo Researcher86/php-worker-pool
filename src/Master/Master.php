@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Master;
 
+use App\Protocol\Message;
 use App\Worker\WorkerPool;
 
 final readonly class Master
@@ -18,13 +19,17 @@ final readonly class Master
 
         $workerId = $pool->get();
 
-        $pool->write($workerId, "Master -> PING\n");
-        $pool->write($workerId, "Master -> PING\n");
-        $pool->write($workerId, "Master -> PING\n");
+        $pool->write($workerId, new Message('ping', 'ping-1'));
+        $pool->write($workerId, new Message('ping', 'ping-2'));
+        $pool->write($workerId, new Message('ping', 'ping-3'));
 
-        echo $pool->read($workerId);
-        echo $pool->read($workerId);
-        echo $pool->read($workerId);
+        $responses = 0;
+        while ($responses < 3) {
+            foreach ($pool->read($workerId) as $message) {
+                echo $message->type . ' ' . $message->id . "\n";
+                $responses++;
+            }
+        }
 
         $pool->stop();
     }

@@ -4,25 +4,56 @@ declare(strict_types=1);
 
 namespace App\IPC;
 
-final readonly class Socket
+use App\Protocol\LengthPrefixedProtocol;
+use App\Protocol\MalformedMessageException;
+use App\Protocol\Message;
+
+final class Socket
 {
+    /** @var resource */
+    private mixed $socket;
+    private LengthPrefixedProtocol $protocol;
+
     /** @param resource $socket */
-    public function __construct(
-        private mixed $socket,
-    ) {
+    public function __construct(mixed $socket)
+    {
+        $this->socket = $socket;
+        $this->protocol = new LengthPrefixedProtocol();
     }
 
-    /** @return string|false */
-    public function read(): string|false
+    /**
+     * Reads until at least one complete message is available and returns
+     * every message decoded. Partial data stays buffered in the decoder.
+     *
+     * @return list<Message>
+     *
+     * @throws MalformedMessageException
+     */
+    public function read(): array
     {
-        $line = fgets($this->socket);
+        while (true) {
+            $messages = $this->protocol->decode($this->readChunk());
 
-        return $line === false ? false : $line;
+            if ($messages !== []) {
+                return $messages;
+            }
+        }
     }
 
-    public function write(string $data): void
+    private function readChunk(): string
     {
-        fwrite($this->socket, $data);
+        $chunk = fread($this->socket, 8192);
+
+        if ($chunk === false || $chunk === '') {
+            throw new MalformedMessageException('Connection closed while awaiting message');
+        }
+
+        return $chunk;
+    }
+
+    public function write(Message $message): void
+    {
+        fwrite($this->socket, $this->protocol->encode($message));
     }
 
     public function close(): void
