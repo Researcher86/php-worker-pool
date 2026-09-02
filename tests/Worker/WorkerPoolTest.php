@@ -4,8 +4,10 @@ declare(ticks = 1);
 
 namespace App\Tests\Worker;
 
+use App\Dispatcher\Dispatcher;
 use App\Protocol\Message;
 use App\Protocol\MessageType;
+use App\Queue\RequestQueue;
 use App\Worker\WorkerPool;
 use PHPUnit\Framework\TestCase;
 
@@ -31,12 +33,13 @@ final class WorkerPoolTest extends TestCase
         }
 
         $pool = new WorkerPool(4);
+        $dispatcher = new Dispatcher(new RequestQueue(), $pool);
 
-        $responses = $pool->requestBatch([
-            'req-1' => new Message(MessageType::REQUEST, 'req-1'),
-            'req-2' => new Message(MessageType::REQUEST, 'req-2'),
-            'req-3' => new Message(MessageType::REQUEST, 'req-3'),
-            'req-4' => new Message(MessageType::REQUEST, 'req-4'),
+        $responses = $dispatcher->run([
+            new Message(MessageType::REQUEST, 'req-1'),
+            new Message(MessageType::REQUEST, 'req-2'),
+            new Message(MessageType::REQUEST, 'req-3'),
+            new Message(MessageType::REQUEST, 'req-4'),
         ]);
 
         $this->assertCount(4, $responses);
@@ -60,8 +63,9 @@ final class WorkerPoolTest extends TestCase
 
         $this->assertNotNull($workerId);
 
-        $responses = $pool->requestBatch([
-            'req' => new Message(MessageType::REQUEST, 'req', ['data' => 'x']),
+        $dispatcher = new Dispatcher(new RequestQueue(), $pool);
+        $responses = $dispatcher->run([
+            new Message(MessageType::REQUEST, 'req', ['data' => 'x']),
         ]);
 
         $this->assertCount(1, $responses);

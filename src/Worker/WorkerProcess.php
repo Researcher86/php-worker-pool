@@ -91,6 +91,12 @@ final class WorkerProcess
         $this->socket->write($message);
     }
 
+    /** @return resource */
+    public function getResource(): mixed
+    {
+        return $this->socket->getResource();
+    }
+
     /** @return list<Message> */
     public function readAvailable(): array
     {

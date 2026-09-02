@@ -606,12 +606,12 @@ Dispatch next request
 
 ## Tasks
 
-* [ ] Create Dispatcher
-* [ ] Find idle worker
-* [ ] Take request from queue
-* [ ] Send request to worker
-* [ ] Mark worker as BUSY
-* [ ] Dispatch next request when worker becomes IDLE
+* [x] Create Dispatcher
+* [x] Find idle worker
+* [x] Take request from queue
+* [x] Send request to worker
+* [x] Mark worker as BUSY
+* [x] Dispatch next request when worker becomes IDLE
 
 ## Important
 

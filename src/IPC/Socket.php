@@ -21,6 +21,12 @@ final class Socket
         $this->protocol = new LengthPrefixedProtocol();
     }
 
+    /** @return resource */
+    public function getResource(): mixed
+    {
+        return $this->socket;
+    }
+
     /**
      * Reads until at least one complete message is available and returns
      * every message decoded. Partial data stays buffered in the decoder.
