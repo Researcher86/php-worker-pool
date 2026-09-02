@@ -61,4 +61,33 @@ final class WorkerProcessTest extends TestCase
         $this->assertSame(WorkerState::DEAD, $this->worker->getState());
         $this->assertNull($this->worker->getCurrentRequestId());
     }
+
+    public function testIsAvailableReflectsState(): void
+    {
+        $this->assertTrue($this->worker->isAvailable());
+
+        $this->worker->beginRequest('req-1');
+        $this->assertFalse($this->worker->isAvailable());
+
+        $this->worker->finishRequest();
+        $this->assertTrue($this->worker->isAvailable());
+
+        $this->worker->stop();
+        $this->assertFalse($this->worker->isAvailable());
+    }
+
+    public function testStopFromStartingMovesToStopping(): void
+    {
+        $this->worker->stop();
+
+        $this->assertSame(WorkerState::STOPPING, $this->worker->getState());
+    }
+
+    public function testStopFromBusyThrows(): void
+    {
+        $this->worker->beginRequest('req-1');
+
+        $this->expectException(\LogicException::class);
+        $this->worker->stop();
+    }
 }

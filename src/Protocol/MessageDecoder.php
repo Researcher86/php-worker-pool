@@ -27,9 +27,11 @@ final class MessageDecoder
         $this->buffer .= $data;
 
         $messages = [];
+        $offset = 0;
+        $length = strlen($this->buffer);
 
-        while (strlen($this->buffer) >= 4) {
-            $size = unpack('N', substr($this->buffer, 0, 4))[1];
+        while ($length - $offset >= 4) {
+            $size = unpack('N', substr($this->buffer, $offset, 4))[1];
 
             if ($size > $this->maxMessageSize) {
                 throw new MalformedMessageException(
@@ -37,14 +39,18 @@ final class MessageDecoder
                 );
             }
 
-            if (strlen($this->buffer) < 4 + $size) {
+            if ($length - $offset < 4 + $size) {
                 break; // wait for the rest of the message
             }
 
-            $payload = substr($this->buffer, 4, $size);
-            $this->buffer = substr($this->buffer, 4 + $size);
+            $payload = substr($this->buffer, $offset + 4, $size);
+            $offset += 4 + $size;
 
             $messages[] = $this->parse($payload);
+        }
+
+        if ($offset > 0) {
+            $this->buffer = substr($this->buffer, $offset);
         }
 
         return $messages;

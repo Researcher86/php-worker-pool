@@ -9,6 +9,8 @@ use App\Protocol\Message;
 
 final class WorkerProcess
 {
+    private const array AVAILABLE_STATES = [WorkerState::STARTING, WorkerState::IDLE];
+
     public function __construct(
         private readonly int $pid,
         private readonly Socket $socket,
@@ -33,15 +35,21 @@ final class WorkerProcess
     }
 
     /**
+     * Whether the worker can currently accept a request or be stopped
+     * (it has not been dispatched to, or is done with its last request).
+     */
+    public function isAvailable(): bool
+    {
+        return in_array($this->state, self::AVAILABLE_STATES, true);
+    }
+
+    /**
      * Marks the worker as busy with the given request, then returns
      * IDLE once the request has finished.
      */
     public function beginRequest(string $requestId): void
     {
-        $this->assertTransitions([
-            WorkerState::STARTING,
-            WorkerState::IDLE,
-        ]);
+        $this->assertTransitions(self::AVAILABLE_STATES);
 
         $this->currentRequestId = $requestId;
         $this->state = WorkerState::BUSY;
@@ -57,7 +65,7 @@ final class WorkerProcess
 
     public function stop(): void
     {
-        $this->assertTransitions([WorkerState::IDLE]);
+        $this->assertTransitions(self::AVAILABLE_STATES);
 
         $this->state = WorkerState::STOPPING;
     }

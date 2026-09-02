@@ -28,6 +28,7 @@ final class Socket
      * @return list<Message>
      *
      * @throws MalformedMessageException
+     * @throws ConnectionClosedException
      */
     public function read(): array
     {
@@ -48,6 +49,7 @@ final class Socket
      * @return list<Message>
      *
      * @throws MalformedMessageException
+     * @throws ConnectionClosedException
      */
     public function readAvailable(int $timeoutMicroseconds = 0): array
     {
@@ -66,8 +68,12 @@ final class Socket
     {
         $chunk = fread($this->socket, 8192);
 
-        if ($chunk === false || $chunk === '') {
-            throw new MalformedMessageException('Connection closed while awaiting message');
+        if ($chunk === false) {
+            throw new MalformedMessageException('Socket read error');
+        }
+
+        if ($chunk === '') {
+            throw new ConnectionClosedException('Connection closed while awaiting message');
         }
 
         return $chunk;

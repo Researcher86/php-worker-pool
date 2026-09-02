@@ -10,10 +10,6 @@ use App\Worker\WorkerPool;
 
 final readonly class Master
 {
-    public function __construct()
-    {
-    }
-
     public function run(): void
     {
         $pool = new WorkerPool(4);

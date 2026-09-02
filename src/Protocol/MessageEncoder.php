@@ -15,7 +15,7 @@ final readonly class MessageEncoder
      */
     public function encode(Message $message): string
     {
-        $payload = json_encode($message->toArray(), JSON_THROW_ON_ERROR);
+        $payload = json_encode($message, JSON_THROW_ON_ERROR);
 
         return pack('N', strlen($payload)) . $payload;
     }

@@ -56,9 +56,9 @@ final class WorkerPoolTest extends TestCase
         }
 
         $pool = new WorkerPool(1);
-        $workerId = $pool->get();
+        $workerId = $pool->getAvailable();
 
-        $this->assertSame($workerId, $pool->getAvailable());
+        $this->assertNotNull($workerId);
 
         $responses = $pool->requestBatch([
             'req' => new Message(MessageType::REQUEST, 'req', ['data' => 'x']),

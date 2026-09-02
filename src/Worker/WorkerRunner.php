@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Worker;
 
+use App\IPC\ConnectionClosedException;
 use App\IPC\Socket;
 use App\Protocol\Message;
 use App\Protocol\MessageType;
@@ -18,7 +19,12 @@ final readonly class WorkerRunner
     public function run(): void
     {
         while (true) {
-            $messages = $this->socket->read();
+            try {
+                $messages = $this->socket->read();
+            } catch (ConnectionClosedException) {
+                $this->close();
+                return;
+            }
 
             foreach ($messages as $message) {
                 if ($message->type === MessageType::SHUTDOWN) {

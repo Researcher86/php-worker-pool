@@ -57,4 +57,33 @@ final class PersistentWorkerTest extends TestCase
 
         $this->assertTrue(pcntl_wifexited($status));
     }
+
+    public function testWorkerExitsCleanlyWhenMasterClosesConnectionWithoutShutdown(): void
+    {
+        if (!function_exists('pcntl_fork')) {
+            $this->markTestSkipped('pcntl extension required');
+        }
+
+        $pair = new SocketPair();
+
+        $pid = pcntl_fork();
+        $this->assertNotSame(-1, $pid, 'fork failed');
+
+        if ($pid === 0) {
+            $pair->closeMaster();
+
+            $runner = new WorkerRunner($pair->getWorkerSocket());
+            $runner->run();
+
+            exit(0);
+        }
+
+        $pair->closeWorker();
+        $pair->getMasterSocket()->close();
+
+        pcntl_waitpid($pid, $status);
+
+        $this->assertTrue(pcntl_wifexited($status));
+        $this->assertSame(0, pcntl_wexitstatus($status));
+    }
 }

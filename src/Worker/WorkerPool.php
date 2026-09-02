@@ -4,6 +4,7 @@ declare(ticks = 1);
 
 namespace App\Worker;
 
+use App\IPC\ConnectionClosedException;
 use App\IPC\SocketPair;
 use App\Protocol\Message;
 use App\Protocol\MessageType;
@@ -43,19 +44,14 @@ class WorkerPool
         return count($this->workers);
     }
 
-    public function get(): int
-    {
-        return array_key_last($this->workers);
-    }
-
     /**
-     * Returns the id of any worker that is not busy, or null if all workers
-     * are currently handling a request.
+     * Returns the id of any worker that can currently accept a request, or
+     * null if all workers are busy, stopping, or dead.
      */
     public function getAvailable(): ?int
     {
         foreach ($this->workers as $id => $worker) {
-            if ($worker->getState() !== WorkerState::BUSY) {
+            if ($worker->isAvailable()) {
                 return $id;
             }
         }
@@ -82,6 +78,7 @@ class WorkerPool
     public function requestBatch(array $requests): array
     {
         $queue = $requests;
+        $pending = array_fill_keys(array_keys($requests), true);
         $responses = [];
 
         while ($queue !== [] || $this->busy() > 0) {
@@ -92,7 +89,10 @@ class WorkerPool
             }
 
             foreach ($this->collectResponses() as $message) {
-                $responses[] = $message;
+                if (isset($pending[$message->id])) {
+                    unset($pending[$message->id]);
+                    $responses[] = $message;
+                }
             }
         }
 
@@ -101,12 +101,18 @@ class WorkerPool
 
     private function busy(): int
     {
-        return count(array_filter($this->workers, fn ($w) => $w->getState() === WorkerState::BUSY));
+        return count(array_filter($this->workers, $this->isBusy(...)));
+    }
+
+    private function isBusy(WorkerProcess $worker): bool
+    {
+        return $worker->getState() === WorkerState::BUSY;
     }
 
     /**
      * Reads a pending response from each busy worker (non-blocking) and returns
-     * all complete responses collected. Marks finished workers IDLE.
+     * all complete responses collected. Marks finished workers IDLE, and
+     * workers whose connection dropped mid-request DEAD.
      *
      * @return list<Message>
      *
@@ -117,16 +123,20 @@ class WorkerPool
         $messages = [];
 
         foreach ($this->workers as $worker) {
-            if ($worker->getState() !== WorkerState::BUSY) {
+            if (!$this->isBusy($worker)) {
                 continue;
             }
 
-            foreach ($worker->readAvailable() as $message) {
-                if ($worker->getCurrentRequestId() === $message->id) {
-                    $worker->finishRequest();
-                }
+            try {
+                foreach ($worker->readAvailable() as $message) {
+                    if ($worker->getCurrentRequestId() === $message->id) {
+                        $worker->finishRequest();
+                    }
 
-                $messages[] = $message;
+                    $messages[] = $message;
+                }
+            } catch (ConnectionClosedException) {
+                $worker->markDead();
             }
         }
 
@@ -136,12 +146,22 @@ class WorkerPool
     public function stop(): void
     {
         foreach ($this->workers as $worker) {
-            $worker->write(new Message(MessageType::SHUTDOWN, 'shutdown-' . $worker->getPid()));
+            if ($worker->getState() !== WorkerState::DEAD) {
+                $worker->stop();
+                $worker->write(new Message(MessageType::SHUTDOWN, 'shutdown-' . $worker->getPid()));
+            }
+
             $worker->close();
         }
 
         while (pcntl_waitpid(-1, $status) !== -1) {
             // reap all children
+        }
+
+        foreach ($this->workers as $worker) {
+            if ($worker->getState() !== WorkerState::DEAD) {
+                $worker->markDead();
+            }
         }
     }
 }
