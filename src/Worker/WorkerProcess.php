@@ -84,12 +84,6 @@ final class WorkerProcess
     }
 
     /** @return list<Message> */
-    public function read(): array
-    {
-        return $this->socket->read();
-    }
-
-    /** @return list<Message> */
     public function readAvailable(): array
     {
         return $this->socket->readAvailable();

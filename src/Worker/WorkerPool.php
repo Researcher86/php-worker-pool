@@ -69,23 +69,9 @@ class WorkerPool
         $this->workers[$workerId]->beginRequest($message->id);
     }
 
-    /** @return list<Message> */
-    public function read(int $workerId): array
-    {
-        $messages = $this->workers[$workerId]->read();
-
-        foreach ($messages as $message) {
-            if ($this->workers[$workerId]->getCurrentRequestId() === $message->id) {
-                $this->workers[$workerId]->finishRequest();
-            }
-        }
-
-        return $messages;
-    }
-
     /**
-     * Dispatches a batch of requests, each to an available worker, and blocks
-     * until a response has arrived for every request (matched by id).
+     * Dispatches the given requests across available workers and blocks until
+     * a response has arrived for every request (matched by id).
      *
      * @param array<string, Message> $requests map of request id => Message
      *
@@ -95,64 +81,52 @@ class WorkerPool
      */
     public function requestBatch(array $requests): array
     {
-        $pending = array_fill_keys(array_keys($requests), true);
-
-        foreach ($requests as $request) {
-            $this->dispatch($request);
-        }
-
+        $queue = $requests;
         $responses = [];
 
-        while ($pending !== []) {
-            foreach ($this->readAll() as $message) {
-                if (isset($pending[$message->id])) {
-                    unset($pending[$message->id]);
-                    $responses[] = $message;
-                }
+        while ($queue !== [] || $this->busy() > 0) {
+            while ($queue !== [] && ($workerId = $this->getAvailable()) !== null) {
+                $id = array_key_first($queue);
+                $this->write($workerId, $queue[$id]);
+                unset($queue[$id]);
+            }
+
+            foreach ($this->collectResponses() as $message) {
+                $responses[] = $message;
             }
         }
 
         return $responses;
     }
 
-    /**
-     * Sends a single request to an available worker and returns its id. Blocks
-     * until a worker becomes free if all of them are busy.
-     *
-     * @throws \App\Protocol\MalformedMessageException
-     */
-    public function dispatch(Message $request): int
+    private function busy(): int
     {
-        while (($workerId = $this->getAvailable()) === null) {
-            $this->readAll();
-        }
-
-        $this->write($workerId, $request);
-
-        return $workerId;
+        return count(array_filter($this->workers, fn ($w) => $w->getState() === WorkerState::BUSY));
     }
 
     /**
-     * Reads a pending response from each busy worker using a short non-blocking
-     * timeout. Skips workers that are not currently handling a request so the
-     * call never blocks on an idle socket.
+     * Reads a pending response from each busy worker (non-blocking) and returns
+     * all complete responses collected. Marks finished workers IDLE.
      *
      * @return list<Message>
      *
      * @throws \App\Protocol\MalformedMessageException
      */
-    public function readAll(): array
+    private function collectResponses(): array
     {
         $messages = [];
 
-        foreach ($this->workers as $id => $worker) {
-            if ($worker->getState() === WorkerState::BUSY) {
-                foreach ($worker->readAvailable() as $message) {
-                    if ($worker->getCurrentRequestId() === $message->id) {
-                        $worker->finishRequest();
-                    }
-                    $messages[] = $message;
+        foreach ($this->workers as $worker) {
+            if ($worker->getState() !== WorkerState::BUSY) {
+                continue;
+            }
+
+            foreach ($worker->readAvailable() as $message) {
+                if ($worker->getCurrentRequestId() === $message->id) {
+                    $worker->finishRequest();
                 }
+
+                $messages[] = $message;
             }
         }
 

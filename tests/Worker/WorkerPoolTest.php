@@ -7,7 +7,6 @@ namespace App\Tests\Worker;
 use App\Protocol\Message;
 use App\Protocol\MessageType;
 use App\Worker\WorkerPool;
-use App\Worker\WorkerState;
 use PHPUnit\Framework\TestCase;
 
 final class WorkerPoolTest extends TestCase
@@ -50,18 +49,23 @@ final class WorkerPoolTest extends TestCase
         $pool->stop();
     }
 
-    public function testDispatchMarksWorkerBusyUntilResponse(): void
+    public function testGetAvailableReturnsIdleWorkerThenChangesWhenBusy(): void
     {
         if (!function_exists('pcntl_fork')) {
             $this->markTestSkipped('pcntl extension required');
         }
 
         $pool = new WorkerPool(1);
+        $workerId = $pool->get();
 
-        $request = new Message(MessageType::REQUEST, 'req', ['data' => 'x']);
-        $workerId = $pool->dispatch($request);
+        $this->assertSame($workerId, $pool->getAvailable());
 
-        $this->assertNotNull($workerId);
+        $responses = $pool->requestBatch([
+            'req' => new Message(MessageType::REQUEST, 'req', ['data' => 'x']),
+        ]);
+
+        $this->assertCount(1, $responses);
+        $this->assertSame($workerId, $pool->getAvailable());
 
         $pool->stop();
     }
