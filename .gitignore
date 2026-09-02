@@ -1,0 +1,33 @@
+# Dependencies
+/vendor/
+
+# PHPUnit
+/.phpunit.result.cache
+/.phpunit.cache/
+/build/logs/
+/coverage/
+/clover.xml
+
+# PHPStan
+/.phpstan/
+/phpstan-baseline.neon
+
+# IDE
+/.idea/
+/.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+
+# Composer
+composer.phar

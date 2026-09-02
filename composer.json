@@ -1,0 +1,29 @@
+{
+    "name": "tanat/php-worker-pool",
+    "type": "project",
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "App\\": "src/"
+        },
+        "autoload-dev": {
+            "psr-4": {
+                "App\\Tests\\": "tests/"
+            }
+        }
+    },
+    "require": {
+        "php": "^8.5"
+    },
+    "require-dev": {
+        "phpstan/phpstan": "^2.2",
+        "phpunit/phpunit": "^11.5"
+    },
+    "scripts": {
+        "test": "phpunit",
+        "analyse": "phpstan analyse"
+    },
+    "config": {
+        "sort-packages": true
+    }
+}
