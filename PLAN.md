@@ -389,13 +389,13 @@ Example:
 
 ## Tasks
 
-* [ ] Create Message class
-* [ ] Create Encoder
-* [ ] Create Decoder
-* [ ] Implement length-prefixed messages
-* [ ] Support partial reads
-* [ ] Support multiple messages in one read
-* [ ] Add malformed message handling
+* [x] Create Message class
+* [x] Create Encoder
+* [x] Create Decoder
+* [x] Implement length-prefixed messages
+* [x] Support partial reads
+* [x] Support multiple messages in one read
+* [x] Add malformed message handling
 
 ## Message Types
 
@@ -412,10 +412,10 @@ pong
 
 The protocol correctly handles:
 
-* [ ] partial messages
-* [ ] multiple messages
-* [ ] large messages
-* [ ] malformed messages
+* [x] partial messages
+* [x] multiple messages
+* [x] large messages
+* [x] malformed messages
 
 ---
 
