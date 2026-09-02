@@ -69,21 +69,14 @@ final class WorkerPool
         return null;
     }
 
-    /** @return list<WorkerProcess> */
-    public function getBusy(): array
+    public function write(int $workerId, Message $message): WorkerProcess
     {
-        return array_values(array_filter($this->workers, $this->isBusy(...)));
-    }
+        $worker = $this->workers[$workerId];
 
-    public function write(int $workerId, Message $message): void
-    {
-        $this->workers[$workerId]->write($message);
-        $this->workers[$workerId]->beginRequest($message->id);
-    }
+        $worker->write($message);
+        $worker->beginRequest($message->id);
 
-    private function isBusy(WorkerProcess $worker): bool
-    {
-        return $worker->getState() === WorkerState::BUSY;
+        return $worker;
     }
 
     public function stop(): void

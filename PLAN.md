@@ -712,16 +712,23 @@ Route Response
 
 ## Tasks
 
-* [ ] Create EventLoop
-* [ ] Register readable sockets
-* [ ] Run stream_select()
-* [ ] Detect event source
-* [ ] Handle client events
-* [ ] Handle worker events
+* [x] Create EventLoop
+* [x] Register readable sockets
+* [x] Run stream_select()
+* [x] Detect event source
+* [ ] Handle client events — no client sockets yet, see Phase 9/10
+* [x] Handle worker events
 
 ## Definition of Done
 
 The Master can simultaneously handle multiple clients and workers.
+
+Partial: `Dispatcher` now drives its worker I/O entirely through `EventLoop`
+(`src/EventLoop/EventLoop.php`) instead of a hand-rolled `stream_select()` —
+worker sockets are registered while busy and deregistered once answered or
+dead. Client sockets aren't handled yet because they don't exist until
+Phase 9/10 build the Unix socket server; those phases should register their
+sockets with the same `EventLoop` rather than adding a second loop.
 
 ---
 
