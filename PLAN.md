@@ -554,11 +554,11 @@ SplQueue
 
 ## Tasks
 
-* [ ] Create RequestQueue abstraction
-* [ ] Add enqueue()
-* [ ] Add dequeue()
-* [ ] Add size()
-* [ ] Add empty check
+* [x] Create RequestQueue abstraction
+* [x] Add enqueue()
+* [x] Add dequeue()
+* [x] Add size()
+* [x] Add empty check
 
 ## Definition of Done
 
