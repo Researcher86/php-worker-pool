@@ -500,12 +500,12 @@ Architecture:
 
 ## Tasks
 
-* [ ] Configure worker count
-* [ ] Start N workers
-* [ ] Create IPC channel for each worker
-* [ ] Register workers
-* [ ] Track worker state
-* [ ] Find an available worker
+* [x] Configure worker count
+* [x] Start N workers
+* [x] Create IPC channel for each worker
+* [x] Register workers
+* [x] Track worker state
+* [x] Find an available worker
 
 ## Initial Configuration
 

@@ -89,6 +89,12 @@ final class WorkerProcess
         return $this->socket->read();
     }
 
+    /** @return list<Message> */
+    public function readAvailable(): array
+    {
+        return $this->socket->readAvailable();
+    }
+
     public function close(): void
     {
         $this->socket->close();

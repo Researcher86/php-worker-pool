@@ -40,6 +40,39 @@ final class Socket
         }
     }
 
+    /**
+     * Reads whatever is currently available without blocking (waits up to the
+     * given timeout for the socket to become readable). Returns all complete
+     * messages decoded so far, or an empty array if nothing arrived yet.
+     *
+     * @return list<Message>
+     *
+     * @throws MalformedMessageException
+     */
+    public function readAvailable(int $timeoutSeconds = 0): array
+    {
+        $read = [$this->socket];
+        $write = null;
+        $except = null;
+
+        $seconds = $timeoutSeconds;
+        $microseconds = 0;
+
+        $ready = @stream_select($read, $write, $except, $seconds, $microseconds);
+
+        if ($ready === false || $ready === 0) {
+            return [];
+        }
+
+        $messages = $this->protocol->decode($this->readChunk());
+
+        if ($messages !== []) {
+            return $messages;
+        }
+
+        return $this->readAvailable($timeoutSeconds);
+    }
+
     private function readChunk(): string
     {
         $chunk = fread($this->socket, 8192);
