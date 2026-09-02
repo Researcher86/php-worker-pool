@@ -261,13 +261,13 @@ stream_socket_pair()
 
 ## Tasks
 
-* [ ] Create a socket pair
-* [ ] Fork a worker process
-* [ ] Close unnecessary socket descriptors
-* [ ] Send a message from Master to Worker
-* [ ] Read the message in Worker
-* [ ] Send a response from Worker to Master
-* [ ] Read the response in Master
+* [x] Create a socket pair
+* [x] Fork a worker process
+* [x] Close unnecessary socket descriptors
+* [x] Send a message from Master to Worker
+* [x] Read the message in Worker
+* [x] Send a response from Worker to Master
+* [x] Read the response in Master
 
 ## Example
 
@@ -314,11 +314,11 @@ IDLE
 
 ## Tasks
 
-* [ ] Create Worker loop
-* [ ] Receive multiple requests
-* [ ] Process requests
-* [ ] Return responses
-* [ ] Support shutdown command
+* [x] Create Worker loop
+* [x] Receive multiple requests
+* [x] Process requests
+* [x] Return responses
+* [x] Support shutdown command
 
 Pseudo-code:
 
