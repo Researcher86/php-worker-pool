@@ -8,7 +8,7 @@ use App\IPC\SocketPair;
 use App\Protocol\Message;
 use App\Protocol\MessageType;
 
-class WorkerPool
+final class WorkerPool
 {
     /** @var array<int, WorkerProcess> */
     private array $workers = [];
@@ -16,26 +16,37 @@ class WorkerPool
     public function __construct(int $workerCount)
     {
         for ($i = 0; $i < $workerCount; $i++) {
-            $socketPair = new SocketPair();
+            $worker = $this->createWorker();
 
-            $pid = pcntl_fork();
-            if ($pid === -1) {
-                die('fork failed');
-            }
-
-            if ($pid === 0) {
-                $socketPair->closeMaster();
-
-                $runner = new WorkerRunner($socketPair->getWorkerSocket());
-                $runner->run();
-
-                exit(0);
-            }
-
-            $socketPair->closeWorker();
-
-            $this->workers[$pid] = new WorkerProcess($pid, $socketPair->getMasterSocket());
+            $this->workers[$worker->getPid()] = $worker;
         }
+    }
+
+    /**
+     * Forks a child process that runs the worker loop and never returns.
+     * Builds and returns the parent-side WorkerProcess for the new child.
+     */
+    private function createWorker(): WorkerProcess
+    {
+        $socketPair = new SocketPair();
+
+        $pid = pcntl_fork();
+        if ($pid === -1) {
+            die('fork failed');
+        }
+
+        if ($pid === 0) {
+            $socketPair->closeMaster();
+
+            $runner = new WorkerRunner($socketPair->getWorkerSocket());
+            $runner->run();
+
+            exit(0);
+        }
+
+        $socketPair->closeWorker();
+
+        return new WorkerProcess($pid, $socketPair->getMasterSocket());
     }
 
     public function count(): int
