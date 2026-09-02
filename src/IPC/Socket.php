@@ -72,13 +72,13 @@ final class Socket
 
     private function readChunk(): string
     {
+        // fread() returns '' on a clean peer close (EOF) and false on a broken
+        // pipe / reset connection — depending on OS timing, a killed peer can
+        // surface as either. Both mean the same thing at this layer: the
+        // connection is gone, not that a message was malformed.
         $chunk = fread($this->socket, 8192);
 
-        if ($chunk === false) {
-            throw new MalformedMessageException('Socket read error');
-        }
-
-        if ($chunk === '') {
+        if ($chunk === false || $chunk === '') {
             throw new ConnectionClosedException('Connection closed while awaiting message');
         }
 

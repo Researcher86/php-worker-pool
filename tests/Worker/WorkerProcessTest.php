@@ -83,9 +83,19 @@ final class WorkerProcessTest extends TestCase
         $this->assertSame(WorkerState::STOPPING, $this->worker->getState());
     }
 
-    public function testStopFromBusyThrows(): void
+    public function testStopFromBusyAbandonsInFlightRequest(): void
     {
         $this->worker->beginRequest('req-1');
+
+        $this->worker->stop();
+
+        $this->assertSame(WorkerState::STOPPING, $this->worker->getState());
+        $this->assertNull($this->worker->getCurrentRequestId());
+    }
+
+    public function testStopFromDeadThrows(): void
+    {
+        $this->worker->markDead();
 
         $this->expectException(\LogicException::class);
         $this->worker->stop();

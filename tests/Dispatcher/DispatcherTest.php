@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Dispatcher;
 
 use App\Dispatcher\Dispatcher;
+use App\Dispatcher\UnresolvedRequestsException;
 use App\Protocol\Message;
 use App\Protocol\MessageType;
 use App\Queue\RequestQueue;
@@ -58,5 +59,33 @@ final class DispatcherTest extends TestCase
         $this->assertNotNull($pool->getAvailable());
 
         $pool->stop();
+    }
+
+    public function testWorkerDyingMidRequestThrowsInsteadOfHanging(): void
+    {
+        if (!function_exists('pcntl_fork') || !function_exists('posix_kill')) {
+            $this->markTestSkipped('pcntl and posix extensions required');
+        }
+
+        $pool = new WorkerPool(1);
+
+        // WorkerPool keys workers by pid, so getAvailable() doubles as "give me
+        // a worker id", true before any request has ever been sent to it.
+        $workerId = $pool->getAvailable();
+        $this->assertNotNull($workerId);
+
+        posix_kill($workerId, SIGKILL);
+
+        $dispatcher = new Dispatcher(new RequestQueue(), $pool);
+
+        try {
+            $this->expectException(UnresolvedRequestsException::class);
+
+            $dispatcher->run([
+                new Message(MessageType::REQUEST, 'req-1'),
+            ]);
+        } finally {
+            $pool->stop();
+        }
     }
 }

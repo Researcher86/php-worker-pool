@@ -63,10 +63,21 @@ final class WorkerProcess
         $this->state = WorkerState::IDLE;
     }
 
+    /**
+     * Requests shutdown. Legal from any state but DEAD — including BUSY,
+     * since the pool must always be able to stop even if a request never
+     * finished — abandoning any in-flight request.
+     */
     public function stop(): void
     {
-        $this->assertTransitions(self::AVAILABLE_STATES);
+        $this->assertTransitions([
+            WorkerState::STARTING,
+            WorkerState::IDLE,
+            WorkerState::BUSY,
+            WorkerState::STOPPING,
+        ]);
 
+        $this->currentRequestId = null;
         $this->state = WorkerState::STOPPING;
     }
 

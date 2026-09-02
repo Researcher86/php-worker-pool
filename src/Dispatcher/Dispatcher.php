@@ -47,6 +47,8 @@ final class Dispatcher
      * @return list<Message> responses, one for each submitted request
      *
      * @throws MalformedMessageException
+     * @throws UnresolvedRequestsException if a worker dies while holding a
+     *         request and no other worker can ever pick it up
      */
     public function run(array $requests): array
     {
@@ -64,6 +66,10 @@ final class Dispatcher
                     unset($pending[$message->id]);
                     $responses[] = $message;
                 }
+            }
+
+            if ($pending !== [] && $this->queue->isEmpty() && $this->pool->getBusy() === []) {
+                throw new UnresolvedRequestsException(array_keys($pending));
             }
         }
 

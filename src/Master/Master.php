@@ -19,12 +19,7 @@ final readonly class Master
 
         $requests = [];
         for ($i = 1; $i <= 8; $i++) {
-            $id = 'ping-' . $i;
-            $requests[] = new Message(
-                MessageType::REQUEST,
-                $id,
-                ['data' => 'Data ' . $i]
-            );
+            $requests[] = new Message(MessageType::REQUEST, 'ping-' . $i, ['data' => 'Data ' . $i]);
         }
 
         $responses = $dispatcher->run($requests);
