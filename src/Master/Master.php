@@ -132,6 +132,16 @@ final class Master
             echo $metrics->snapshot()->format();
         });
 
+        // PLAN.md Phase 19: replace every worker with a fresh one, without
+        // dropping any client connection or in-flight request - SIGHUP is
+        // the traditional Unix "reload your config/workers" signal (nginx,
+        // php-fpm again). The new generation is available immediately;
+        // retireIdleWorkers() in the main loop below is what actually winds
+        // the old one down as each worker finishes what it's doing.
+        pcntl_signal(SIGHUP, static function () use ($pool): void {
+            $pool->reload();
+        });
+
         $remaining = 0.0;
 
         try {
@@ -145,6 +155,7 @@ final class Master
                 $loop->tick(self::TIMEOUT_CHECK_INTERVAL_SECONDS);
 
                 $this->sendTimeouts($pendingRequests);
+                $pool->retireIdleWorkers();
             }
 
             $remaining = $this->shutdown($server, $loop, $pendingRequests, $requestMetrics);

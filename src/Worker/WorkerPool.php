@@ -23,6 +23,14 @@ final class WorkerPool
     // essentially immediately, so that number is almost always 0.
     private int $totalCrashed = 0;
 
+    // PLAN.md Phase 19: pids of the outgoing generation during a reload().
+    // Still present in $workers (so stop()/reapDeadWorkers() keep working
+    // unchanged) but excluded from getAvailable() - a busy one is left
+    // completely alone until it finishes on its own, a set-and-forget flag
+    // rather than a second array to keep in sync.
+    /** @var array<int, true> */
+    private array $retiringPids = [];
+
     /**
      * $launcher defaults to actually forking a process — pass a test double
      * to get workers backed by a plain socket pair instead, with no real
@@ -67,7 +75,7 @@ final class WorkerPool
     public function getAvailable(): ?int
     {
         foreach ($this->workers as $id => $worker) {
-            if ($worker->isAvailable()) {
+            if (!isset($this->retiringPids[$id]) && $worker->isAvailable()) {
                 return $id;
             }
         }
@@ -92,6 +100,12 @@ final class WorkerPool
      * shutting down, immediately replaced so the pool stays at its
      * configured size.
      *
+     * A worker in STOPPING when it's reaped was told to stop by us (either
+     * stop() or a reload() retirement, PLAN.md Phase 19) - that's an
+     * expected exit, not a crash: no WorkerCrash, no totalCrashed bump, and
+     * no replacement, since retireIdleWorkers() already launched one when
+     * it decided to retire this one.
+     *
      * @return list<WorkerCrash>
      */
     public function reapDeadWorkers(): array
@@ -105,6 +119,8 @@ final class WorkerPool
                 continue; // not a worker we're tracking (already handled elsewhere)
             }
 
+            $expected = $worker->getState() === WorkerState::STOPPING;
+
             // Capture before markDead() clears it - Dispatcher may
             // independently detect and report the same crash via the
             // worker's closed socket; whichever of the two gets here first
@@ -112,6 +128,10 @@ final class WorkerPool
             $lostRequestId = $worker->getCurrentRequestId();
             $worker->markDead();
             unset($this->workers[$pid]);
+
+            if ($expected) {
+                continue;
+            }
 
             $crashes[] = new WorkerCrash($worker, $lostRequestId);
             $this->totalCrashed++;
@@ -123,6 +143,80 @@ final class WorkerPool
         }
 
         return $crashes;
+    }
+
+    /**
+     * PLAN.md Phase 19: replaces the whole pool without ever going below
+     * its configured size or dropping a request in flight. Starts a full
+     * new generation immediately - they're available for new dispatch right
+     * away - and marks every worker that existed before this call retiring:
+     * excluded from new dispatch, but a busy one is otherwise left
+     * completely alone (its current request finishes and gets answered
+     * exactly as it would have anyway - Dispatcher never even knows a
+     * reload happened). retireIdleWorkers() is what actually shuts a
+     * retiring worker down, once it's confirmed idle.
+     *
+     * A reload already in progress (some previous generation still
+     * retiring) makes this a no-op - stacking reloads would launch another
+     * full generation on top of one that hasn't finished leaving yet,
+     * growing the pool instead of replacing it.
+     */
+    public function reload(): void
+    {
+        if ($this->retiringPids !== []) {
+            return;
+        }
+
+        $outgoing = array_keys($this->workers);
+
+        foreach ($outgoing as $ignored) {
+            $worker = $this->launcher->launch();
+            $this->workers[$worker->getPid()] = $worker;
+        }
+
+        foreach ($outgoing as $pid) {
+            $this->retiringPids[$pid] = true;
+        }
+
+        $this->retireIdleWorkers();
+    }
+
+    /**
+     * Shuts down any retiring worker (see reload()) that has finished
+     * whatever it was doing and is now idle. Meant to be polled
+     * periodically (Master does this every tick, alongside its other
+     * per-tick sweeps) rather than triggered by an event, since nothing
+     * currently notifies WorkerPool the moment a specific worker finishes a
+     * request.
+     */
+    public function retireIdleWorkers(): void
+    {
+        foreach (array_keys($this->retiringPids) as $pid) {
+            $worker = $this->workers[$pid] ?? null;
+
+            // isAvailable(), not just "=== IDLE": a retiring worker that was
+            // never dispatched to at all (still STARTING) is just as safe
+            // to retire right away as one that finished and went IDLE -
+            // checking IDLE only would leave a never-used worker retiring
+            // forever.
+            if ($worker === null || !$worker->isAvailable()) {
+                if ($worker === null) {
+                    unset($this->retiringPids[$pid]); // gone already (e.g. crashed) - nothing left to retire
+                }
+
+                continue;
+            }
+
+            $worker->stop();
+            $worker->write(new Message(MessageType::SHUTDOWN, 'reload-' . $pid));
+            $worker->close();
+
+            unset($this->retiringPids[$pid]);
+            // Left in $this->workers on purpose: reapDeadWorkers() (SIGCHLD)
+            // will clean it up once the process actually exits, the same
+            // way it does for a crash - stop() also still needs to find it
+            // here if a shutdown signal arrives before that happens.
+        }
     }
 
     /**
@@ -141,17 +235,25 @@ final class WorkerPool
         // Pass 1: tell every still-connected worker to shut down and close
         // our end of its socket. A worker already DEAD (its process is gone,
         // see Dispatcher/ConnectionClosedException) skips the shutdown
-        // message — there's nothing left to send it to.
+        // message — there's nothing left to send it to. One already
+        // STOPPING (retireIdleWorkers() got to it first - PLAN.md Phase 19)
+        // already had its socket written to and closed; touching it again
+        // would write/close an already-closed resource. It still needs to
+        // be waited for below either way, just without repeating that.
         $awaiting = 0;
 
         foreach ($this->workers as $worker) {
-            if ($worker->getState() !== WorkerState::DEAD) {
-                $worker->stop();
-                $worker->write(new Message(MessageType::SHUTDOWN, 'shutdown-' . $worker->getPid()));
-                $awaiting++;
+            if ($worker->getState() === WorkerState::DEAD) {
+                continue;
             }
 
-            $worker->close();
+            if ($worker->getState() !== WorkerState::STOPPING) {
+                $worker->stop();
+                $worker->write(new Message(MessageType::SHUTDOWN, 'shutdown-' . $worker->getPid()));
+                $worker->close();
+            }
+
+            $awaiting++;
         }
 
         // pcntl_waitpid(-1, ...) reaps whichever child exits next, not a

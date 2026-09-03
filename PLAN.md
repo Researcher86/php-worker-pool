@@ -1512,6 +1512,38 @@ Old Workers Shutdown
 
 Workers can be replaced without dropping client connections.
 
+## Status
+
+WorkerPool::reload() starts a full new generation immediately (available
+for new dispatch right away) and marks the outgoing generation retiring -
+excluded from new dispatch, but a busy one is left completely alone until
+it finishes: Dispatcher never even knows a reload happened, so its response
+is routed back to the client exactly as if nothing had changed.
+retireIdleWorkers(), polled once per Master tick, is what actually shuts a
+retiring worker down once it's confirmed available (idle, or never
+dispatched to at all). Wired to SIGHUP, the traditional Unix "reload"
+signal (nginx, php-fpm again).
+
+Two bugs turned up only under a real live run, not the unit tests written
+alongside the initial implementation - both fixed:
+- retireIdleWorkers() checked for state exactly IDLE, so a retiring worker
+  that was never dispatched to at all (still STARTING) would never retire.
+- reapDeadWorkers() (the Phase 15 SIGCHLD handler) didn't know a STOPPING
+  worker's exit could be an intentional retirement rather than a crash, so
+  it launched a second, unwanted replacement for every one that finished
+  retiring - on top of the one reload() already started.
+Also fixed along the way: WorkerPool::stop() would try to write to and
+close a retiring worker's already-closed socket if called before that
+worker had actually been reaped (a live-only ordering the FakeWorkerLauncher
+unit tests happened not to exercise either).
+
+Verified live: against a real running server, four original worker pids,
+SIGHUP, and within under a second exactly four new pids (none from the
+original set) - not five, not eight left stranded. A separate script proved
+the more important half directly: a request already in flight to a worker
+at the moment of reload() still gets its real response delivered to the
+client once that worker finishes, not a dropped connection.
+
 ---
 
 # Phase 20 — Autoscaling Workers

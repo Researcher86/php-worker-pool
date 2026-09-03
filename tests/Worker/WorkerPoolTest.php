@@ -184,4 +184,74 @@ final class WorkerPoolTest extends TestCase
 
         $pool->stop();
     }
+
+    /**
+     * PLAN.md Phase 19: reload() replaces every worker without dropping the
+     * pool below its configured size or below its target once the old
+     * generation is gone. All idle at reload time, so retiring finishes
+     * immediately (still inside reload() itself).
+     */
+    public function testReloadReplacesIdleWorkersImmediately(): void
+    {
+        $launcher = new FakeWorkerLauncher();
+        $pool = new WorkerPool(2, $launcher);
+
+        $pool->reload();
+
+        // Briefly inflated (old generation still present, marked STOPPING,
+        // not yet reaped) - both old and new exist at once during reload.
+        $this->assertSame(4, $pool->count());
+
+        $pool->stop();
+    }
+
+    /**
+     * The actual point of reload() being separate from stop(): a worker
+     * mid-request when reload() is called keeps processing and answering
+     * completely normally - retireIdleWorkers() must not touch it, or
+     * finishRequest()/the in-flight response would break.
+     */
+    public function testReloadLeavesABusyWorkerAloneUntilItFinishes(): void
+    {
+        $launcher = new FakeWorkerLauncher();
+        $pool = new WorkerPool(1, $launcher);
+
+        $busyId = $pool->getAvailable();
+        $this->assertNotNull($busyId);
+        $worker = $pool->write($busyId, new Message(MessageType::REQUEST, 'req-1'));
+
+        $pool->reload();
+        $pool->retireIdleWorkers(); // no-op for a still-busy worker
+
+        $this->assertSame(WorkerState::BUSY, $worker->getState());
+        $this->assertSame('req-1', $worker->getCurrentRequestId()); // untouched by reload
+
+        // The new generation is immediately usable, the retiring one is not.
+        $this->assertNotSame($busyId, $pool->getAvailable());
+
+        // Finishes its request normally, same as if no reload had happened.
+        $worker->finishRequest();
+        $pool->retireIdleWorkers();
+
+        $this->assertSame(WorkerState::STOPPING, $worker->getState());
+
+        $pool->stop();
+    }
+
+    public function testReloadWhileAlreadyRetiringIsANoOp(): void
+    {
+        $launcher = new FakeWorkerLauncher();
+        $pool = new WorkerPool(1, $launcher);
+
+        $busyId = $pool->getAvailable();
+        $pool->write($busyId, new Message(MessageType::REQUEST, 'req-1'));
+
+        $pool->reload(); // 1 old (busy, retiring) + 1 new = 2
+        $this->assertSame(2, $pool->count());
+
+        $pool->reload(); // old generation still retiring - must not stack another one
+        $this->assertSame(2, $pool->count());
+
+        $pool->stop();
+    }
 }
