@@ -25,15 +25,27 @@ final class Dispatcher
 {
     private readonly EventLoop $loop;
 
+    /** @var \Closure(Message): void */
+    private readonly \Closure $onResponse;
+
     /** @var list<Message> */
     private array $collected = [];
 
+    /**
+     * @param callable(Message): void|null $onResponse invoked with every
+     *        response as soon as it's read from a worker - the event-driven
+     *        counterpart to draining waitForActivity()/run()'s return value.
+     *        Defaults to a no-op for callers that only use the batch API.
+     */
     public function __construct(
         private readonly RequestQueue $queue,
         private readonly WorkerPool $pool,
         ?EventLoop $loop = null,
+        ?callable $onResponse = null,
     ) {
         $this->loop = $loop ?? new EventLoop();
+        $this->onResponse = \Closure::fromCallable($onResponse ?? static function (Message $message): void {
+        });
     }
 
     /**
@@ -133,6 +145,7 @@ final class Dispatcher
                     }
 
                     $this->collected[] = $message;
+                    ($this->onResponse)($message);
                 }
             } catch (ConnectionClosedException) {
                 // The worker process is gone. Stop watching its socket —

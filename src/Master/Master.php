@@ -6,8 +6,11 @@ namespace App\Master;
 
 use App\Client\ClientConnection;
 use App\Client\ClientRegistry;
+use App\Client\PendingRequestRegistry;
+use App\Dispatcher\Dispatcher;
 use App\EventLoop\EventLoop;
 use App\Protocol\Message;
+use App\Queue\RequestQueue;
 use App\Server\UnixSocketServer;
 use App\Worker\WorkerPool;
 
@@ -21,11 +24,30 @@ final class Master
     {
         $pool = new WorkerPool(4);
         $loop = new EventLoop();
+        $pendingRequests = new PendingRequestRegistry();
 
-        // Phase 11 will route a decoded request through a Dispatcher (queue
-        // + dispatch to $pool) and track it in a pending-requests registry
-        // so the eventual response reaches this same client.
-        $clients = new ClientRegistry($loop, function (ClientConnection $client, Message $message): void {
+        // A worker's response carries the id the Master dispatched it
+        // under, not the client's original id - resolve() maps back to
+        // both, so the reply can go out on the right socket under the id
+        // that client is actually expecting.
+        $dispatcher = new Dispatcher(new RequestQueue(), $pool, $loop, function (Message $response) use ($pendingRequests): void {
+            $pending = $pendingRequests->resolve($response->id);
+
+            if ($pending === null) {
+                return; // unknown or already-handled id - nothing to route it to
+            }
+
+            $pending->client->write(new Message($response->type, $pending->originalId, $response->payload));
+        });
+
+        // Each client request is dispatched under a Master-assigned id
+        // (see PendingRequestRegistry) rather than the client's own, so two
+        // clients (or one client, by mistake) picking the same id can never
+        // misroute a response.
+        $clients = new ClientRegistry($loop, function (ClientConnection $client, Message $request) use ($dispatcher, $pendingRequests): void {
+            $dispatchId = $pendingRequests->register($client, $request->id);
+
+            $dispatcher->dispatch(new Message($request->type, $dispatchId, $request->payload));
         });
 
         $server = new UnixSocketServer(self::SOCKET_PATH, $loop, $clients->accept(...));

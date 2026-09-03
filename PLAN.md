@@ -891,16 +891,27 @@ Deadline
 
 ## Tasks
 
-* [ ] Generate unique request ID
-* [ ] Register pending request
-* [ ] Assign worker
-* [ ] Find request by ID
-* [ ] Route response to client
-* [ ] Remove completed request
+* [x] Generate unique request ID — Master-assigned (PendingRequestRegistry),
+      not the client's own id: two clients (or one, by mistake) reusing the
+      same id can't collide, since the registry's key is never the id a
+      client chose. The client's original id is restored before its
+      response is written back.
+* [x] Register pending request
+* [x] Assign worker — already handled by the existing Dispatcher/WorkerPool
+      from Phase 6/7; this phase just feeds client requests into it
+* [x] Find request by ID
+* [x] Route response to client
+* [x] Remove completed request — resolve() is one-shot (unset on lookup)
 
 ## Definition of Done
 
 Responses always return to the correct client.
+
+Verified live: two clients connected simultaneously, both sending a request
+under the identical correlation id "same-id" with different payloads - each
+received back exactly its own response, never the other's (see
+PendingRequestRegistryTest for the unit-level collision case, and a manual
+end-to-end run for the live one).
 
 ---
 
