@@ -7,6 +7,7 @@ namespace App\Tests\Worker;
 use App\Protocol\Message;
 use App\Protocol\MessageType;
 use App\Queue\RequestQueue;
+use App\Tests\Support\FakeClock;
 use App\Worker\Autoscaler;
 use App\Worker\WorkerPool;
 use PHPUnit\Framework\TestCase;
@@ -117,6 +118,31 @@ final class AutoscalerTest extends TestCase
         $autoscaler->check(); // called immediately after - cooldown should block this one
 
         $this->assertSame(4, $pool->countIdle() + $pool->countBusy());
+
+        $pool->stop();
+    }
+
+    /**
+     * Same scenario as testCooldownPreventsScalingTwiceInQuickSuccession,
+     * but proving the other half: once the cooldown has actually elapsed, a
+     * second scaling action is allowed. A FakeClock is what makes this
+     * checkable at all without a real 5-second sleep in the test suite.
+     */
+    public function testCooldownAllowsScalingAgainOnceItElapses(): void
+    {
+        $pool = new WorkerPool(5, new FakeWorkerLauncher());
+        // Starts well above 0.0 - Autoscaler::$lastScaledAt itself defaults
+        // to 0.0, so a clock starting at exactly 0.0 would make its very
+        // first check() look like it's still within the cooldown window.
+        $clock = new FakeClock(1_000.0);
+
+        $autoscaler = new Autoscaler($pool, new RequestQueue(), minWorkers: 1, maxWorkers: 16, step: 1, cooldownSeconds: 5.0, clock: $clock);
+
+        $autoscaler->check(); // scales down by 1 -> 4
+        $clock->advance(5.1);
+        $autoscaler->check(); // cooldown elapsed -> scales down again -> 3
+
+        $this->assertSame(3, $pool->countIdle() + $pool->countBusy());
 
         $pool->stop();
     }

@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Worker;
 
 use App\Queue\RequestQueue;
+use App\Support\Clock;
+use App\Support\SystemClock;
 
 /**
  * PLAN.md Phase 20: grows the pool when the queue has work waiting and no
@@ -37,12 +39,13 @@ final class Autoscaler
         // vice versa) before the previous change has had any chance to
         // matter.
         private readonly float $cooldownSeconds = 5.0,
+        private readonly Clock $clock = new SystemClock(),
     ) {
     }
 
     public function check(): void
     {
-        $now = microtime(true);
+        $now = $this->clock->now();
 
         if ($now - $this->lastScaledAt < $this->cooldownSeconds) {
             return;

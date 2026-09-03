@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace App\Client;
 
+use App\Support\Clock;
+use App\Support\SystemClock;
+
 /**
  * Tracks which client is waiting for the response to which dispatched
  * request, so a worker's response - which can arrive in any order relative
@@ -30,6 +33,11 @@ final class PendingRequestRegistry
     /** @var array<string, PendingRequest> */
     private array $pending = [];
 
+    public function __construct(
+        private readonly Clock $clock = new SystemClock(),
+    ) {
+    }
+
     /**
      * Registers $client as awaiting a response and returns the id to
      * dispatch the request under. $timeoutSeconds from now, the entry
@@ -38,7 +46,7 @@ final class PendingRequestRegistry
     public function register(ClientConnection $client, string $originalId, float $timeoutSeconds): string
     {
         $id = 'req-' . $this->nextId++;
-        $this->pending[$id] = new PendingRequest($client, $originalId, microtime(true) + $timeoutSeconds);
+        $this->pending[$id] = new PendingRequest($client, $originalId, $this->clock->now() + $timeoutSeconds);
 
         return $id;
     }

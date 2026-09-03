@@ -1641,6 +1641,26 @@ Covered by `AutoscalerTest` (unchanged assertions still pass, confirming no
 behavior regression) and a new `WorkerPoolTest::
 testReloadDoesNotExceedMaxWorkersWhenPoolIsNearCapacity` regression test.
 
+**`Support/Clock`** (from the original "Suggested Project Structure"
+sketch, added now rather than up front): `Autoscaler::check()`'s cooldown
+and `PendingRequestRegistry::register()`'s deadline both called
+`microtime(true)` directly, which made their time-dependent behavior
+untestable except via real sleeps or workarounds (`AutoscalerTest` used
+`cooldownSeconds: 0.0` to sidestep the cooldown entirely;
+`PendingRequestRegistryTest` used a negative `$timeoutSeconds` to fake an
+already-past deadline - both still work and are unchanged). Both now take
+an optional `Clock` (default `SystemClock`, i.e. `microtime(true)` -
+behavior identical unless a test overrides it). `FakeClock` (under
+`tests/Support/`, same test-double convention as `FakeWorkerLauncher`) lets
+a test move time forward explicitly - new coverage: `AutoscalerTest::
+testCooldownAllowsScalingAgainOnceItElapses` (previously impossible to
+assert without a real 5s sleep) and `PendingRequestRegistryTest`'s
+deadline tests, rewritten to advance a `FakeClock` past the deadline
+instead of relying on a negative timeout trick.
+
+`Support/IdGenerator` (the sketch's other suggestion) was deliberately not
+added - see the Actual Structure note above.
+
 ---
 
 # Recommended Implementation Order
@@ -1726,6 +1746,12 @@ Phase 20 — Worker Autoscaling
 
 # Suggested Project Structure
 
+Original sketch, written before implementation started. Kept below for
+history; the actual structure that came out of building the 20 phases is
+listed after it — several things moved namespace, merged, or split as the
+real requirements (testability with fakes, error types belonging next to
+what throws them, ...) became concrete.
+
 ```text
 src/
 │
@@ -1768,6 +1794,91 @@ src/
 └── Support/
     ├── IdGenerator.php
     └── Clock.php
+```
+
+## Actual Structure
+
+`EventLoop` and `Dispatcher` ended up as their own top-level namespaces
+rather than living under `Master/` - both are used and tested independently
+of it. `ClientRegistry`/`ClientConnection`/`PendingRequest(Registry)` stayed
+together under `Client/` instead of splitting into a separate `Request/`;
+nothing ever needed standalone `Request`/`Response` value objects beyond
+`Protocol\Message`. The PHP SDK client (`WorkerPoolClient`) lives under
+`Sdk/`, not `Client/`, since it's a consumer of the protocol from outside
+the Master process, not part of the Master's own client-handling. Each
+namespace holds its own exception types next to what throws them
+(`Dispatcher\UnresolvedRequestsException`, `IPC\ConnectionClosedException`,
+`Protocol\MalformedMessageException`, `Sdk\ConnectionFailedException`,
+`Sdk\RequestTimedOutException`) rather than a shared `Exceptions/`.
+`Metrics/MetricsRegistry` became `Metrics/MetricsCollector` (plus
+`Metrics.php` and `RequestMetrics.php` for the snapshot value object and the
+counters it reads - Phase 17). `Support/IdGenerator` was never built - every
+id in this codebase is either a trivial incrementing counter
+(`PendingRequestRegistry`) or `uniqid()` (`WorkerPoolClient`), and neither
+had an actual problem (collisions, predictability, ...) that would justify
+the abstraction. `Support/Clock` was added post-Phase-20, during a code
+review - see its own note below.
+
+```text
+src/
+│
+├── Master/
+│   └── Master.php
+│
+├── EventLoop/
+│   └── EventLoop.php
+│
+├── Dispatcher/
+│   ├── Dispatcher.php
+│   └── UnresolvedRequestsException.php
+│
+├── Worker/
+│   ├── WorkerPool.php
+│   ├── WorkerProcess.php
+│   ├── WorkerRunner.php
+│   ├── WorkerState.php
+│   ├── WorkerCrash.php
+│   ├── WorkerLauncher.php
+│   ├── ForkedWorkerLauncher.php
+│   └── Autoscaler.php
+│
+├── Protocol/
+│   ├── Message.php
+│   ├── MessageType.php
+│   ├── MessageEncoder.php
+│   ├── MessageDecoder.php
+│   └── MalformedMessageException.php
+│
+├── IPC/
+│   ├── Socket.php
+│   ├── SocketPair.php
+│   └── ConnectionClosedException.php
+│
+├── Server/
+│   └── UnixSocketServer.php
+│
+├── Queue/
+│   └── RequestQueue.php
+│
+├── Client/
+│   ├── ClientConnection.php
+│   ├── ClientRegistry.php
+│   ├── PendingRequest.php
+│   └── PendingRequestRegistry.php
+│
+├── Sdk/
+│   ├── WorkerPoolClient.php
+│   ├── ConnectionFailedException.php
+│   └── RequestTimedOutException.php
+│
+├── Metrics/
+│   ├── Metrics.php
+│   ├── MetricsCollector.php
+│   └── RequestMetrics.php
+│
+└── Support/
+    ├── Clock.php
+    └── SystemClock.php
 ```
 
 ---

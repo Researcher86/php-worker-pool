@@ -7,6 +7,7 @@ namespace App\Tests\Client;
 use App\Client\ClientConnection;
 use App\Client\PendingRequestRegistry;
 use App\IPC\Socket;
+use App\Tests\Support\FakeClock;
 use PHPUnit\Framework\TestCase;
 
 final class PendingRequestRegistryTest extends TestCase
@@ -76,18 +77,15 @@ final class PendingRequestRegistryTest extends TestCase
 
     public function testRemoveExpiredReturnsAndRemovesOnlyEntriesPastTheirDeadline(): void
     {
-        $registry = new PendingRequestRegistry();
+        $clock = new FakeClock(1_000.0);
+        $registry = new PendingRequestRegistry($clock);
 
-        // register() computes its deadline from the real clock (microtime())
-        // rather than accepting an injectable "now", so a negative timeout
-        // is the deterministic way to get an already-past deadline without
-        // sleeping in the test: deadline = now + (-1) is before any "now"
-        // checked immediately after.
-        $registry->register($this->client(), 'expired', -1.0);
+        $registry->register($this->client(), 'expired', 30.0); // deadline 1030
         $freshClient = $this->client();
-        $registry->register($freshClient, 'still-fresh', 100.0);
+        $registry->register($freshClient, 'still-fresh', 100.0); // deadline 1100
 
-        $expired = $registry->removeExpired(microtime(true));
+        $clock->set(1_030.0);
+        $expired = $registry->removeExpired($clock->now());
 
         $this->assertCount(1, $expired);
         $this->assertSame('expired', $expired[0]->originalId);
@@ -97,12 +95,14 @@ final class PendingRequestRegistryTest extends TestCase
 
     public function testRemoveExpiredIsOneShotAndAccumulatesTimeoutCount(): void
     {
-        $registry = new PendingRequestRegistry();
+        $clock = new FakeClock();
+        $registry = new PendingRequestRegistry($clock);
 
-        $id = $registry->register($this->client(), 'req-1', -1.0);
+        $id = $registry->register($this->client(), 'req-1', 30.0);
+        $clock->advance(30.0);
 
-        $this->assertCount(1, $registry->removeExpired(microtime(true)));
-        $this->assertCount(0, $registry->removeExpired(microtime(true))); // already removed
+        $this->assertCount(1, $registry->removeExpired($clock->now()));
+        $this->assertCount(0, $registry->removeExpired($clock->now())); // already removed
         $this->assertNull($registry->resolve($id)); // and not resolvable either
 
         $this->assertSame(1, $registry->timeoutCount());
@@ -110,7 +110,8 @@ final class PendingRequestRegistryTest extends TestCase
 
     public function testDrainAllReturnsAndRemovesEverythingRegardlessOfDeadline(): void
     {
-        $registry = new PendingRequestRegistry();
+        $clock = new FakeClock();
+        $registry = new PendingRequestRegistry($clock);
         $clientA = $this->client();
         $clientB = $this->client();
 
