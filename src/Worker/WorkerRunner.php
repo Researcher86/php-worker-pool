@@ -45,7 +45,14 @@ final readonly class WorkerRunner
     {
         echo $request->id . "\n";
 
-        return new Message(MessageType::RESPONSE, $request->id, $request->payload);
+        return match ($request->payload['action'] ?? null) {
+            'calculate' => new Message(MessageType::RESPONSE, $request->id, [
+                'result' => $request->payload['params']['a'] + $request->payload['params']['b'],
+            ]),
+            // No action (or an unrecognized one) - keep the old echo-back
+            // behavior the rest of the test suite relies on.
+            default => new Message(MessageType::RESPONSE, $request->id, $request->payload),
+        };
     }
 
     private function sendResponse(Message $response): void

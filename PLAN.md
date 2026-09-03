@@ -951,11 +951,10 @@ $response = $client->call(
 * [x] Handle connection errors — ConnectionFailedException
 * [x] Handle timeouts — RequestTimedOutException
 
-Note: `call(string $action, array $params)`'s worker-side handling is purely
-illustrative right now - WorkerRunner's demo handler just echoes back
-whatever payload it received (see Worker/WorkerRunner.php), there's no real
-per-action routing/business logic implemented anywhere. That's outside what
-this phase (or any phase in this plan) asks for.
+Note: WorkerRunner::handle() now routes on `action` via `match` - `calculate`
+does a real `a + b` (see Worker/WorkerRunner.php); anything else (or no
+action at all) still falls back to echoing the payload back, which is what
+the rest of the test suite's plain-payload requests rely on.
 
 Socket::readAvailable() changed from an int-microseconds timeout to a float-
 seconds one while implementing this - the old signature couldn't safely
