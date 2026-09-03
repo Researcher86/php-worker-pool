@@ -1616,6 +1616,31 @@ and after); after ~15s idle it settles back to exactly 2. All 60 requests
 completed successfully throughout (confirmed via the Phase 17 SIGUSR1
 snapshot: Total 60, Completed 60, Failed 0).
 
+**Post-review fixes** (found by a full-project code review after Phase 20
+landed, both interactions between this phase and Phase 19 that no earlier
+phase's tests exercised together):
+
+- `Autoscaler::check()` computed idle capacity as `count() - countBusy()`,
+  which counted a retiring (STOPPING) worker as spare idle capacity even
+  though it can never actually be dispatched to - it could silently stall
+  scale-up under real backlog. Fixed to use `WorkerPool::countIdle()`
+  (already correct via `isAvailable()`) instead of reimplementing it.
+- `WorkerPool::reload()` launched a full duplicate generation unconditionally,
+  sized to match the *current* pool - harmless when the pool was always a
+  fixed size, but once Autoscaler can grow it up to `maxWorkers`, a reload
+  arriving near that ceiling could transiently double the live process count
+  past it. `WorkerPool` now takes an optional `maxWorkers` (Master passes its
+  own), and `reload()` replaces the outgoing generation in waves via
+  `advanceReload()` - launching only as many replacements as fit under the
+  cap, then launching more as retiring workers actually get reaped and free
+  up headroom (`reapDeadWorkers()` resumes it). Guarantees forward progress
+  (at most a 1-worker transient overshoot) if reload() is requested while
+  already at the cap, rather than deadlocking.
+
+Covered by `AutoscalerTest` (unchanged assertions still pass, confirming no
+behavior regression) and a new `WorkerPoolTest::
+testReloadDoesNotExceedMaxWorkersWhenPoolIsNearCapacity` regression test.
+
 ---
 
 # Recommended Implementation Order

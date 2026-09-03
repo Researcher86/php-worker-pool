@@ -238,6 +238,25 @@ final class WorkerPoolTest extends TestCase
         $pool->stop();
     }
 
+    /**
+     * Regression test: reload() used to launch a full duplicate generation
+     * unconditionally, which could momentarily double the pool past
+     * maxWorkers once Autoscaler (Phase 20) could have already grown it
+     * close to that ceiling. It must now cap the transient size instead.
+     */
+    public function testReloadDoesNotExceedMaxWorkersWhenPoolIsNearCapacity(): void
+    {
+        $launcher = new FakeWorkerLauncher();
+        $pool = new WorkerPool(3, $launcher, maxWorkers: 4);
+
+        $pool->reload();
+
+        // Old behavior would have given 6 (3 outgoing + 3 replacements).
+        $this->assertSame(4, $pool->count());
+
+        $pool->stop();
+    }
+
     public function testReloadWhileAlreadyRetiringIsANoOp(): void
     {
         $launcher = new FakeWorkerLauncher();

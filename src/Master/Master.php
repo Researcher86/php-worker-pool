@@ -50,7 +50,7 @@ final class Master
 
     public function run(): void
     {
-        $pool = new WorkerPool(self::MIN_WORKERS);
+        $pool = new WorkerPool(self::MIN_WORKERS, maxWorkers: self::MAX_WORKERS);
         $loop = new EventLoop();
         $pendingRequests = new PendingRequestRegistry();
         $queue = new RequestQueue(self::MAX_QUEUE_SIZE);

@@ -49,7 +49,11 @@ final class Autoscaler
         }
 
         $total = $this->pool->count();
-        $idle = $total - $this->pool->countBusy();
+        // countIdle(), not count() - countBusy(): a retiring (STOPPING)
+        // worker is neither busy nor available for dispatch, but count()
+        // still includes it until reapDeadWorkers() catches up - subtracting
+        // countBusy() from that would wrongly count it as spare capacity.
+        $idle = $this->pool->countIdle();
 
         // Queue is growing and there's no spare capacity to absorb it.
         if (!$this->queue->isEmpty() && $idle === 0 && $total < $this->maxWorkers) {

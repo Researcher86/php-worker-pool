@@ -31,6 +31,14 @@ final class WorkerPool
     /** @var array<int, true> */
     private array $retiringPids = [];
 
+    // PLAN.md Phase 19/20 interaction: outgoing pids from reload() still
+    // waiting for a replacement because launching one right away would push
+    // the pool past $maxWorkers (relevant once Autoscaler can have grown it
+    // close to that ceiling already). Drained by advanceReload() as headroom
+    // frees up - see reapDeadWorkers().
+    /** @var list<int> */
+    private array $pendingReload = [];
+
     /**
      * $launcher defaults to actually forking a process — pass a test double
      * to get workers backed by a plain socket pair instead, with no real
@@ -39,6 +47,7 @@ final class WorkerPool
     public function __construct(
         int $workerCount,
         private readonly WorkerLauncher $launcher = new ForkedWorkerLauncher(),
+        private readonly int $maxWorkers = PHP_INT_MAX,
     ) {
         for ($i = 0; $i < $workerCount; $i++) {
             $worker = $this->launcher->launch();
@@ -142,6 +151,13 @@ final class WorkerPool
             }
         }
 
+        // A reaped worker frees headroom under $maxWorkers - if reload() was
+        // waiting on that to replace more of the outgoing generation, this
+        // is what lets it keep going.
+        if ($this->pendingReload !== []) {
+            $this->advanceReload();
+        }
+
         return $crashes;
     }
 
@@ -157,24 +173,39 @@ final class WorkerPool
      * retiring worker down, once it's confirmed idle.
      *
      * A reload already in progress (some previous generation still
-     * retiring) makes this a no-op - stacking reloads would launch another
-     * full generation on top of one that hasn't finished leaving yet,
-     * growing the pool instead of replacing it.
+     * retiring, or still waiting on $maxWorkers headroom) makes this a
+     * no-op - stacking reloads would launch another full generation on top
+     * of one that hasn't finished leaving yet, growing the pool instead of
+     * replacing it.
      */
     public function reload(): void
     {
-        if ($this->retiringPids !== []) {
+        if ($this->retiringPids !== [] || $this->pendingReload !== []) {
             return;
         }
 
-        $outgoing = array_keys($this->workers);
+        $this->pendingReload = array_keys($this->workers);
+        $this->advanceReload();
+    }
 
-        foreach ($outgoing as $ignored) {
+    /**
+     * Launches a replacement for each pending outgoing worker one at a time,
+     * stopping once the pool would exceed $maxWorkers - relevant once
+     * Autoscaler may already have grown it close to that ceiling, where
+     * launching a full duplicate generation up front (the old behavior)
+     * could momentarily double the live process count past it. Always makes
+     * progress on at least one, even over the cap, if nothing is currently
+     * retiring - otherwise a reload requested while already at $maxWorkers
+     * would never start at all.
+     */
+    private function advanceReload(): void
+    {
+        while ($this->pendingReload !== [] && (count($this->workers) < $this->maxWorkers || $this->retiringPids === [])) {
+            $pid = array_shift($this->pendingReload);
+
             $worker = $this->launcher->launch();
             $this->workers[$worker->getPid()] = $worker;
-        }
 
-        foreach ($outgoing as $pid) {
             $this->retiringPids[$pid] = true;
         }
 
