@@ -137,4 +137,51 @@ final class WorkerPoolTest extends TestCase
         // exists - false means it's really gone.
         $this->assertFalse(posix_kill($stuckPid, 0));
     }
+
+    /** PLAN.md Phase 17: workers_idle / workers_busy / workers_dead (lifetime). */
+    public function testCountIdleAndCountBusyReflectWorkerState(): void
+    {
+        $launcher = new FakeWorkerLauncher();
+        $pool = new WorkerPool(2, $launcher);
+
+        $this->assertSame(2, $pool->countIdle());
+        $this->assertSame(0, $pool->countBusy());
+
+        $busyId = $pool->getAvailable();
+        $this->assertNotNull($busyId);
+        $pool->write($busyId, new Message(MessageType::REQUEST, 'req-1'));
+
+        $this->assertSame(1, $pool->countIdle());
+        $this->assertSame(1, $pool->countBusy());
+
+        $pool->stop();
+    }
+
+    public function testTotalCrashedAccumulatesAcrossReapCalls(): void
+    {
+        if (!function_exists('pcntl_fork') || !function_exists('posix_kill')) {
+            $this->markTestSkipped('pcntl and posix extensions required');
+        }
+
+        $pool = new WorkerPool(2);
+        $this->assertSame(0, $pool->totalCrashed());
+
+        $firstVictim = $pool->getAvailable();
+        posix_kill($firstVictim, SIGKILL);
+        usleep(100_000);
+        $pool->reapDeadWorkers();
+
+        $this->assertSame(1, $pool->totalCrashed());
+
+        // Kill whichever worker is available now (the replacement or the
+        // other original one - either way, a second crash).
+        $secondVictim = $pool->getAvailable();
+        posix_kill($secondVictim, SIGKILL);
+        usleep(100_000);
+        $pool->reapDeadWorkers();
+
+        $this->assertSame(2, $pool->totalCrashed());
+
+        $pool->stop();
+    }
 }

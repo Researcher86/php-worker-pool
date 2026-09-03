@@ -1,0 +1,38 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Tests\Metrics;
+
+use App\Metrics\Metrics;
+use PHPUnit\Framework\TestCase;
+
+final class MetricsTest extends TestCase
+{
+    /** format() matches PLAN.md Phase 17's own "Example Output" shape exactly. */
+    public function testFormatMatchesThePlansExampleOutputShape(): void
+    {
+        $metrics = new Metrics(
+            workersTotal: 8,
+            workersIdle: 3,
+            workersBusy: 5,
+            workersCrashedTotal: 0,
+            queueSize: 124,
+            requestsTotal: 100_000,
+            requestsCompleted: 99_800,
+            requestsFailed: 150,
+            requestsTimeout: 50,
+            requestsRejected: 0,
+        );
+
+        $formatted = $metrics->format();
+
+        $this->assertStringContainsString('Worker Pool Status', $formatted);
+        $this->assertStringContainsString("Workers:\n  Total: 8\n  Idle: 3\n  Busy: 5", $formatted);
+        $this->assertStringContainsString("Queue:\n  Pending: 124", $formatted);
+        $this->assertStringContainsString(
+            "Requests:\n  Total: 100000\n  Completed: 99800\n  Failed: 150\n  Timeout: 50",
+            $formatted
+        );
+    }
+}

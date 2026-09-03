@@ -9,6 +9,8 @@ use App\Client\ClientRegistry;
 use App\Client\PendingRequestRegistry;
 use App\Dispatcher\Dispatcher;
 use App\EventLoop\EventLoop;
+use App\Metrics\MetricsCollector;
+use App\Metrics\RequestMetrics;
 use App\Protocol\Message;
 use App\Protocol\MessageType;
 use App\Queue\RequestQueue;
@@ -45,21 +47,31 @@ final class Master
         $pool = new WorkerPool(4);
         $loop = new EventLoop();
         $pendingRequests = new PendingRequestRegistry();
+        $queue = new RequestQueue(self::MAX_QUEUE_SIZE);
+        $requestMetrics = new RequestMetrics();
+        $metrics = new MetricsCollector($pool, $queue, $pendingRequests, $requestMetrics);
 
         // A worker's response carries the id the Master dispatched it
         // under, not the client's original id - resolve() maps back to
         // both, so the reply can go out on the right socket under the id
         // that client is actually expecting.
         $dispatcher = new Dispatcher(
-            new RequestQueue(self::MAX_QUEUE_SIZE),
+            $queue,
             $pool,
             $loop,
-            function (Message $response) use ($pendingRequests): void {
+            function (Message $response) use ($pendingRequests, $requestMetrics): void {
                 $pending = $pendingRequests->resolve($response->id);
 
                 if ($pending === null) {
                     return; // unknown or already-handled id - nothing to route it to
                 }
+
+                // A RESPONSE is a real worker reply; anything else here is
+                // the worker_crashed error Dispatcher::watch() synthesizes
+                // when the worker died mid-request (PLAN.md Phase 15).
+                $response->type === MessageType::RESPONSE
+                    ? $requestMetrics->recordCompleted()
+                    : $requestMetrics->recordFailed();
 
                 $pending->client->write(new Message($response->type, $pending->originalId, $response->payload));
             }
@@ -69,7 +81,9 @@ final class Master
         // (see PendingRequestRegistry) rather than the client's own, so two
         // clients (or one client, by mistake) picking the same id can never
         // misroute a response.
-        $clients = new ClientRegistry($loop, function (ClientConnection $client, Message $request) use ($dispatcher, $pendingRequests): void {
+        $clients = new ClientRegistry($loop, function (ClientConnection $client, Message $request) use ($dispatcher, $pendingRequests, $requestMetrics): void {
+            $requestMetrics->recordReceived();
+
             $dispatchId = $pendingRequests->register($client, $request->id, self::REQUEST_TIMEOUT_SECONDS);
 
             $dispatched = $dispatcher->dispatch(new Message($request->type, $dispatchId, $request->payload));
@@ -94,7 +108,7 @@ final class Master
         // noticed by Dispatcher's read-based detection at all, since it's
         // only watching busy workers. SIGCHLD catches it immediately either
         // way and keeps the pool at full strength.
-        pcntl_signal(SIGCHLD, function () use ($pool, $pendingRequests): void {
+        pcntl_signal(SIGCHLD, function () use ($pool, $pendingRequests, $requestMetrics): void {
             foreach ($pool->reapDeadWorkers() as $crash) {
                 if ($crash->lostRequestId === null) {
                     continue;
@@ -103,9 +117,19 @@ final class Master
                 $pending = $pendingRequests->resolve($crash->lostRequestId);
 
                 if ($pending !== null) {
+                    $requestMetrics->recordFailed();
                     $pending->client->write(new Message(MessageType::ERROR, $pending->originalId, ['error' => 'worker_crashed']));
                 }
             }
+        });
+
+        // PLAN.md Phase 17: dump the current Metrics snapshot to stdout on
+        // demand rather than on a schedule - `kill -USR1 <pid>` is the usual
+        // Unix convention for "report your stats now" (used the same way by,
+        // e.g., nginx and php-fpm), and needs no new wire protocol or
+        // endpoint to do it.
+        pcntl_signal(SIGUSR1, function () use ($metrics): void {
+            echo $metrics->snapshot()->format();
         });
 
         $remaining = 0.0;
@@ -123,7 +147,7 @@ final class Master
                 $this->sendTimeouts($pendingRequests);
             }
 
-            $remaining = $this->shutdown($server, $loop, $pendingRequests);
+            $remaining = $this->shutdown($server, $loop, $pendingRequests, $requestMetrics);
         } finally {
             // Whatever's left of the same overall shutdown budget also
             // bounds waiting for workers to actually exit - the timeout is
@@ -144,7 +168,7 @@ final class Master
      * @return float seconds left of the overall shutdown budget once
      *         draining stopped (0 or negative if the timeout was reached)
      */
-    private function shutdown(UnixSocketServer $server, EventLoop $loop, PendingRequestRegistry $pendingRequests): float
+    private function shutdown(UnixSocketServer $server, EventLoop $loop, PendingRequestRegistry $pendingRequests, RequestMetrics $requestMetrics): float
     {
         $server->close();
 
@@ -161,6 +185,7 @@ final class Master
         // right after this returns, is about to forcibly end the workers
         // still holding some of these anyway).
         foreach ($pendingRequests->drainAll() as $stillPending) {
+            $requestMetrics->recordFailed();
             $stillPending->client->write(new Message(MessageType::ERROR, $stillPending->originalId, ['error' => 'server_shutting_down']));
         }
 

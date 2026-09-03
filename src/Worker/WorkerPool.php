@@ -17,6 +17,12 @@ final class WorkerPool
     // (stop() only tells the workers present when it started to shut down).
     private bool $accepting = true;
 
+    // PLAN.md Phase 17: how many workers have crashed over the pool's whole
+    // lifetime. A live count of currently-dead workers would be close to
+    // meaningless here - reapDeadWorkers() removes and replaces each one
+    // essentially immediately, so that number is almost always 0.
+    private int $totalCrashed = 0;
+
     /**
      * $launcher defaults to actually forking a process — pass a test double
      * to get workers backed by a plain socket pair instead, with no real
@@ -36,6 +42,22 @@ final class WorkerPool
     public function count(): int
     {
         return count($this->workers);
+    }
+
+    /** STARTING counts as idle here: it means "never dispatched to yet", not "unavailable". */
+    public function countIdle(): int
+    {
+        return count(array_filter($this->workers, static fn (WorkerProcess $w) => $w->isAvailable()));
+    }
+
+    public function countBusy(): int
+    {
+        return count(array_filter($this->workers, static fn (WorkerProcess $w) => $w->getState() === WorkerState::BUSY));
+    }
+
+    public function totalCrashed(): int
+    {
+        return $this->totalCrashed;
     }
 
     /**
@@ -92,6 +114,7 @@ final class WorkerPool
             unset($this->workers[$pid]);
 
             $crashes[] = new WorkerCrash($worker, $lostRequestId);
+            $this->totalCrashed++;
 
             if ($this->accepting) {
                 $replacement = $this->launcher->launch();

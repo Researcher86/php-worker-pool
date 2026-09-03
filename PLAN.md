@@ -1386,6 +1386,33 @@ Requests:
   Timeout: 50
 ```
 
+## Status
+
+Implemented: WorkerPool::countIdle()/countBusy()/totalCrashed() (lifetime,
+not a live count - reapDeadWorkers() removes and replaces a crashed worker
+essentially immediately, so a live count would almost always read 0),
+RequestQueue::size()/rejectedCount() (already existed),
+PendingRequestRegistry::timeoutCount() (already existed), and a new
+RequestMetrics (requests_total/completed/failed) that Master updates at
+each point a request's outcome is decided. MetricsCollector::snapshot()
+pulls all of it into one Metrics value object; Metrics::format() matches
+this phase's own Example Output above. Exposed via `kill -USR1 <pid>`,
+dumping the snapshot to stdout - the usual Unix convention for "report your
+stats now" (nginx and php-fpm both do the same), and it needed no new wire
+protocol or endpoint.
+
+Not implemented: the "Performance Metrics" (request_duration,
+worker_processing_time) and queue_wait_time. All three need timestamps
+nothing in this codebase tracks yet (when a request was queued, when a
+worker actually picked it up), and this phase - unlike every other one -
+has no Tasks/Definition of Done section forcing the question, so this was
+a judgment call: add the counters that were cheap and directly derivable
+from state that already exists, not invent the extra bookkeeping speculatively.
+
+Verified live: 3 real requests through a running server, then SIGUSR1 -
+the dumped snapshot read Workers Total 4/Idle 4/Busy 0 and Requests Total
+3/Completed 3, matching reality exactly.
+
 ---
 
 # Phase 18 — Multiple Requests Per Connection
