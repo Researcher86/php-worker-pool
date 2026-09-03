@@ -86,6 +86,15 @@ final class Dispatcher
      */
     public function run(array $requests): array
     {
+        // The bounded queue (Phase 13 backpressure) rejects in dispatch() by
+        // returning false, but run() returns list<Message> and can't signal a
+        // single rejection - so when the queue is already at its limit, fail
+        // fast rather than silently growing past it. dispatch() keeps that
+        // fine-grained per-request behaviour for the event-driven path.
+        if ($this->queue->isFull()) {
+            throw new \RuntimeException('request queue is already at its configured capacity');
+        }
+
         $pending = [];
         foreach ($requests as $request) {
             $this->queue->enqueue($request);

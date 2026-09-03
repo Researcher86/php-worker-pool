@@ -9,8 +9,9 @@ use App\Support\Clock;
 /** Test double for Clock: time only moves when the test tells it to. */
 final class FakeClock implements Clock
 {
-    public function __construct(private float $now = 0.0)
-    {
+    public function __construct(
+        private float $now = 0.0,
+    ) {
     }
 
     public function now(): float

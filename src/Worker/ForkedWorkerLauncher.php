@@ -28,7 +28,10 @@ final class ForkedWorkerLauncher implements WorkerLauncher
 
         $pid = pcntl_fork();
         if ($pid === -1) {
-            die('fork failed');
+            // Throwing lets the caller (Master's try/finally) tear down the
+            // pool and sockets instead of die()'ing from inside here, which
+            // would skip that cleanup.
+            throw new \RuntimeException('fork failed');
         }
 
         if ($pid === 0) {
