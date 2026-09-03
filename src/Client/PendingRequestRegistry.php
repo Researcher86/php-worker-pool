@@ -79,6 +79,22 @@ final class PendingRequestRegistry
         return $expired;
     }
 
+    /**
+     * Removes and returns every still-tracked entry, regardless of
+     * deadline. For graceful shutdown (PLAN.md Phase 16): whatever is left
+     * once the drain window closes needs to be told the Master is going
+     * away, not just silently abandoned.
+     *
+     * @return list<PendingRequest>
+     */
+    public function drainAll(): array
+    {
+        $all = array_values($this->pending);
+        $this->pending = [];
+
+        return $all;
+    }
+
     public function count(): int
     {
         return count($this->pending);

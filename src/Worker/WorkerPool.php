@@ -102,7 +102,16 @@ final class WorkerPool
         return $crashes;
     }
 
-    public function stop(): void
+    /**
+     * PLAN.md Phase 16's safety timeout: sends every worker SHUTDOWN, waits
+     * up to $timeoutSeconds for them to actually exit, then SIGKILLs
+     * whatever is still alive rather than blocking forever on a worker
+     * that's stuck or simply never got the message. Callers that already
+     * drained pending work first (see Master) will normally find every
+     * worker exits well within the timeout - it exists for the case where
+     * that didn't happen.
+     */
+    public function stop(float $timeoutSeconds = 5.0): void
     {
         $this->accepting = false;
 
@@ -110,10 +119,13 @@ final class WorkerPool
         // our end of its socket. A worker already DEAD (its process is gone,
         // see Dispatcher/ConnectionClosedException) skips the shutdown
         // message — there's nothing left to send it to.
+        $awaiting = 0;
+
         foreach ($this->workers as $worker) {
             if ($worker->getState() !== WorkerState::DEAD) {
                 $worker->stop();
                 $worker->write(new Message(MessageType::SHUTDOWN, 'shutdown-' . $worker->getPid()));
+                $awaiting++;
             }
 
             $worker->close();
@@ -121,11 +133,44 @@ final class WorkerPool
 
         // pcntl_waitpid(-1, ...) reaps whichever child exits next, not a
         // specific pid, so there's no way to know which WorkerProcess it
-        // belonged to. Reap everyone first, then mark every worker DEAD in
-        // a second pass below — by the time we get there all of them really
-        // are gone.
+        // belonged to - $awaiting just counts however many are still out
+        // there, regardless of which. No sleep between WNOHANG polls would
+        // busy-spin the CPU for the whole timeout whenever a worker takes
+        // any real time to exit, so back off slightly between attempts.
+        $deadline = microtime(true) + $timeoutSeconds;
+
+        while ($awaiting > 0 && microtime(true) < $deadline) {
+            $pid = pcntl_waitpid(-1, $status, WNOHANG);
+
+            if ($pid > 0) {
+                $awaiting--;
+            } elseif ($pid === -1) {
+                // No child processes exist at all (errno ECHILD) - nothing
+                // left to wait for. Real workers that already exited take
+                // this path too, but it's also what a WorkerLauncher test
+                // double with no real process behind it looks like from the
+                // very first check - without this, $awaiting would never
+                // reach 0 and this loop would just spin for the full
+                // timeout every time.
+                break;
+            } else {
+                usleep(10_000);
+            }
+        }
+
+        // Anything still alive past the timeout is stuck (or just never
+        // read the SHUTDOWN message) - force it. SIGKILL can't be caught,
+        // blocked, or ignored, so every remaining worker is guaranteed to
+        // actually exit almost immediately, bounding the final reap below
+        // even though that wait isn't itself time-limited.
+        foreach ($this->workers as $worker) {
+            if ($worker->getState() !== WorkerState::DEAD) {
+                posix_kill($worker->getPid(), SIGKILL);
+            }
+        }
+
         while (pcntl_waitpid(-1, $status) !== -1) {
-            // reap all children
+            // reap whatever's left
         }
 
         foreach ($this->workers as $worker) {

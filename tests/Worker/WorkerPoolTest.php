@@ -109,4 +109,32 @@ final class WorkerPoolTest extends TestCase
 
         $pool->stop();
     }
+
+    /**
+     * PLAN.md Phase 16's safety timeout: a worker that never reads the
+     * SHUTDOWN message (stuck, or just too slow) must not hang shutdown
+     * forever - stop() gives up on it and SIGKILLs it instead.
+     */
+    public function testStopKillsAWorkerThatNeverRespondsToShutdown(): void
+    {
+        if (!function_exists('pcntl_fork') || !function_exists('posix_kill')) {
+            $this->markTestSkipped('pcntl and posix extensions required');
+        }
+
+        $pool = new WorkerPool(1, new StuckWorkerLauncher());
+        $stuckPid = $pool->getAvailable();
+        $this->assertNotNull($stuckPid);
+
+        $start = microtime(true);
+        $pool->stop(0.3);
+        $elapsed = microtime(true) - $start;
+
+        // Proves the SIGKILL fallback actually fired rather than this test
+        // blocking for the worker's full 60-second sleep.
+        $this->assertLessThan(5.0, $elapsed);
+
+        // posix_kill(..., 0) sends no signal, just checks the process still
+        // exists - false means it's really gone.
+        $this->assertFalse(posix_kill($stuckPid, 0));
+    }
 }

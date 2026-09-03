@@ -107,4 +107,25 @@ final class PendingRequestRegistryTest extends TestCase
 
         $this->assertSame(1, $registry->timeoutCount());
     }
+
+    public function testDrainAllReturnsAndRemovesEverythingRegardlessOfDeadline(): void
+    {
+        $registry = new PendingRequestRegistry();
+        $clientA = $this->client();
+        $clientB = $this->client();
+
+        // One already past its deadline, one far from it - drainAll()
+        // doesn't care either way, unlike removeExpired().
+        $registry->register($clientA, 'req-a', -1.0);
+        $registry->register($clientB, 'req-b', 100.0);
+
+        $drained = $registry->drainAll();
+
+        $this->assertCount(2, $drained);
+        $ids = array_map(static fn ($p) => $p->originalId, $drained);
+        sort($ids);
+        $this->assertSame(['req-a', 'req-b'], $ids);
+
+        $this->assertSame(0, $registry->count());
+    }
 }

@@ -1295,16 +1295,35 @@ SIGKILL
 
 ## Tasks
 
-* [ ] Handle SIGTERM
-* [ ] Stop accepting new connections
-* [ ] Drain requests
-* [ ] Shutdown workers
-* [ ] Wait for children
-* [ ] Remove socket file
+* [x] Handle SIGTERM — already done since Phase 9; this phase is about what
+      happens next, not catching the signal itself
+* [x] Stop accepting new connections — Master::shutdown() closes the
+      UnixSocketServer (removing its listener from the shared EventLoop)
+      before doing anything else
+* [x] Drain requests — Master::shutdown() keeps ticking the same $loop,
+      bounded by GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS (30s, this phase's own
+      example value), until PendingRequestRegistry empties on its own.
+      Anything still pending once that budget runs out gets
+      {"type":"error","payload":{"error":"server_shutting_down"}} instead
+      of being silently dropped
+* [x] Shutdown workers — WorkerPool::stop() (unchanged trigger, extended
+      behavior - see below)
+* [x] Wait for children — WorkerPool::stop() waits for exits, bounded by
+      whatever's left of the same overall shutdown budget, then SIGKILLs
+      anything still alive rather than blocking forever
+* [x] Remove socket file — UnixSocketServer::close(), unchanged from Phase 9
 
 ## Definition of Done
 
 The system shuts down without immediately killing active work.
+
+Verified live: a request still in flight when shutdown begins and whose
+worker answers within the safety timeout gets its real response, not a
+shutdown error - the client only ever sees `{"type":"error","payload":
+{"error":"server_shutting_down"}}` when the worker doesn't answer in time.
+Normal shutdown (nothing pending) stays fast and clean, same as before this
+phase. WorkerPoolTest proves stop()'s SIGKILL fallback actually fires
+against a worker that never reads the SHUTDOWN message, rather than hanging.
 
 ---
 

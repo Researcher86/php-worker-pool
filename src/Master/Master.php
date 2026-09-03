@@ -33,6 +33,11 @@ final class Master
     // detected, not how precisely - see PendingRequestRegistry::removeExpired().
     private const float TIMEOUT_CHECK_INTERVAL_SECONDS = 1.0;
 
+    // PLAN.md Phase 16's safety timeout: once a shutdown signal arrives,
+    // queued and in-flight requests get this long, total, to finish before
+    // the Master gives up on whoever's left and force-stops the workers.
+    private const float GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS = 30.0;
+
     private bool $running = true;
 
     public function run(): void
@@ -103,6 +108,8 @@ final class Master
             }
         });
 
+        $remaining = 0.0;
+
         try {
             // Accept client connections until a shutdown signal arrives. The
             // blocking stream_select() inside tick() returns early on a caught
@@ -110,19 +117,60 @@ final class Master
             // and, regardless of a signal, at least once every
             // TIMEOUT_CHECK_INTERVAL_SECONDS, which is what lets requests
             // past their deadline actually get noticed.
-            // PHPStan's while.alwaysTrue can't see $this->running flip to false
-            // because that only happens inside the signal-handler callback.
-            // @phpstan-ignore-next-line while.alwaysTrue
             while ($this->running) {
                 $loop->tick(self::TIMEOUT_CHECK_INTERVAL_SECONDS);
 
-                foreach ($pendingRequests->removeExpired(microtime(true)) as $expired) {
-                    $expired->client->write(new Message(MessageType::ERROR, $expired->originalId, ['error' => 'request_timeout']));
-                }
+                $this->sendTimeouts($pendingRequests);
             }
+
+            $remaining = $this->shutdown($server, $loop, $pendingRequests);
         } finally {
-            $server->close();
-            $pool->stop();
+            // Whatever's left of the same overall shutdown budget also
+            // bounds waiting for workers to actually exit - the timeout is
+            // one end-to-end allowance (PLAN.md: SIGTERM -> ... -> SIGKILL
+            // after gracefulShutdownTimeout), not 30s of draining plus a
+            // separate window on top of it.
+            $pool->stop(max(0.0, $remaining));
+        }
+    }
+
+    /**
+     * PLAN.md Phase 16: on a shutdown signal, stop taking new connections
+     * immediately, then give queued/in-flight requests a bounded window to
+     * actually finish (normal traffic keeps flowing through the same $loop
+     * the whole time - workers and already-connected clients don't know
+     * anything is happening) before giving up on whoever's still pending.
+     *
+     * @return float seconds left of the overall shutdown budget once
+     *         draining stopped (0 or negative if the timeout was reached)
+     */
+    private function shutdown(UnixSocketServer $server, EventLoop $loop, PendingRequestRegistry $pendingRequests): float
+    {
+        $server->close();
+
+        $deadline = microtime(true) + self::GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS;
+
+        while ($pendingRequests->count() > 0 && microtime(true) < $deadline) {
+            $loop->tick(min($deadline - microtime(true), self::TIMEOUT_CHECK_INTERVAL_SECONDS));
+
+            $this->sendTimeouts($pendingRequests);
+        }
+
+        // Whatever's left didn't finish inside the safety timeout - tell
+        // those clients rather than just abandoning them (pool->stop(),
+        // right after this returns, is about to forcibly end the workers
+        // still holding some of these anyway).
+        foreach ($pendingRequests->drainAll() as $stillPending) {
+            $stillPending->client->write(new Message(MessageType::ERROR, $stillPending->originalId, ['error' => 'server_shutting_down']));
+        }
+
+        return $deadline - microtime(true);
+    }
+
+    private function sendTimeouts(PendingRequestRegistry $pendingRequests): void
+    {
+        foreach ($pendingRequests->removeExpired(microtime(true)) as $expired) {
+            $expired->client->write(new Message(MessageType::ERROR, $expired->originalId, ['error' => 'request_timeout']));
         }
     }
 
