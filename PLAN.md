@@ -1456,6 +1456,26 @@ $response = $request2->await();
 
 One client connection can have multiple pending requests simultaneously.
 
+## Status
+
+Already true, as a consequence of earlier phases' design rather than new
+work this phase: ClientRegistry's read handler already decodes and forwards
+every message readAvailable() returns in one pass (not just the first), and
+PendingRequestRegistry's keys are per-request dispatch ids, never tied to
+which connection sent them - nothing stops multiple entries from pointing
+at the same ClientConnection at once, and each is routed back independently
+by id regardless of arrival order. Verified rather than built: two tests
+proving it (ClientRegistryTest - three requests on one connection all reach
+onRequest; a second answering them out of order and confirming each
+response still lands on its own original id) and a live run against a real
+server (one real connection, three requests, real workers finishing them
+out of order, each response still correctly matched back).
+
+The "Future Client API" (`$client->send()->await()`) is explicitly this
+phase's own forward-looking sketch, not part of its Definition of Done -
+WorkerPoolClient (Phase 12) stays a synchronous one-request-per-connection
+client; nothing about that needed to change for this phase.
+
 ---
 
 # Phase 19 — Graceful Reload

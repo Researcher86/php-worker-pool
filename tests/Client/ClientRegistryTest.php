@@ -6,10 +6,15 @@ namespace App\Tests\Client;
 
 use App\Client\ClientConnection;
 use App\Client\ClientRegistry;
+use App\Client\PendingRequestRegistry;
+use App\Dispatcher\Dispatcher;
 use App\EventLoop\EventLoop;
 use App\IPC\Socket;
 use App\Protocol\Message;
 use App\Protocol\MessageType;
+use App\Queue\RequestQueue;
+use App\Tests\Worker\FakeWorkerLauncher;
+use App\Worker\WorkerPool;
 use PHPUnit\Framework\TestCase;
 
 final class ClientRegistryTest extends TestCase
@@ -116,5 +121,113 @@ final class ClientRegistryTest extends TestCase
 
         fclose($clientA);
         fclose($clientB);
+    }
+
+    /**
+     * PLAN.md Phase 18's Definition of Done: one connection can have
+     * multiple pending requests at once. This isn't new machinery - the
+     * handler already reads and decodes everything readAvailable() returns
+     * in one pass, invoking onRequest once per message - this just proves
+     * three requests sent back to back on the same connection, before any
+     * response, all get delivered rather than only the first one.
+     */
+    public function testMultipleRequestsOnOneConnectionAllReachOnRequest(): void
+    {
+        $loop = new EventLoop();
+        $received = [];
+
+        $registry = new ClientRegistry(
+            $loop,
+            function (ClientConnection $client, Message $message) use (&$received): void {
+                $received[] = $message->id;
+            }
+        );
+
+        [$serverEnd, $clientEnd] = $this->pair();
+        $registry->accept($serverEnd);
+
+        $clientSocket = new Socket($clientEnd);
+        $clientSocket->write(new Message(MessageType::REQUEST, 'req-1'));
+        $clientSocket->write(new Message(MessageType::REQUEST, 'req-2'));
+        $clientSocket->write(new Message(MessageType::REQUEST, 'req-3'));
+
+        $loop->tick();
+
+        $this->assertSame(['req-1', 'req-2', 'req-3'], $received);
+
+        fclose($clientEnd);
+    }
+
+    /**
+     * The other half of PLAN.md Phase 18's Definition of Done: responses to
+     * concurrent requests on one connection "may arrive" out of order
+     * (the plan's own example: #2, #1, #3), and each must still reach the
+     * client under its own original id - reusing the full Master-style
+     * wiring (Dispatcher + PendingRequestRegistry), just without a real
+     * fork or socket server, to prove the id-based routing genuinely
+     * doesn't assume in-order completion.
+     */
+    public function testConcurrentRequestsGetRoutedBackCorrectlyEvenWhenAnsweredOutOfOrder(): void
+    {
+        $launcher = new FakeWorkerLauncher();
+        $pool = new WorkerPool(3, $launcher);
+        $loop = new EventLoop();
+        $pendingRequests = new PendingRequestRegistry();
+
+        $dispatcher = new Dispatcher(new RequestQueue(), $pool, $loop, function (Message $response) use ($pendingRequests): void {
+            $pending = $pendingRequests->resolve($response->id);
+
+            if ($pending !== null) {
+                $pending->client->write(new Message($response->type, $pending->originalId, $response->payload));
+            }
+        });
+
+        $clients = new ClientRegistry($loop, function (ClientConnection $client, Message $request) use ($dispatcher, $pendingRequests): void {
+            $dispatchId = $pendingRequests->register($client, $request->id, 30.0);
+            $dispatcher->dispatch(new Message($request->type, $dispatchId, $request->payload));
+        });
+
+        [$serverEnd, $clientEnd] = $this->pair();
+        $clients->accept($serverEnd);
+
+        $clientSocket = new Socket($clientEnd);
+        $clientSocket->write(new Message(MessageType::REQUEST, 'task-1', ['n' => 1]));
+        $clientSocket->write(new Message(MessageType::REQUEST, 'task-2', ['n' => 2]));
+        $clientSocket->write(new Message(MessageType::REQUEST, 'task-3', ['n' => 3]));
+
+        $loop->tick(); // accept the connection, decode and dispatch all three
+
+        $this->assertSame(3, $pendingRequests->count());
+
+        // Answer out of order (2, 3, 1) - each fake worker was given the
+        // Master-assigned dispatch id ('req-N', in dispatch order), not the
+        // client's original one.
+        $workerEnds = $launcher->workerEnds();
+        $workerEnds[1]->write(new Message(MessageType::RESPONSE, 'req-2', ['n' => 2]));
+        $workerEnds[2]->write(new Message(MessageType::RESPONSE, 'req-3', ['n' => 3]));
+        $workerEnds[0]->write(new Message(MessageType::RESPONSE, 'req-1', ['n' => 1]));
+
+        // All three fake worker sockets are already readable at once here,
+        // so one tick() normally drains all of them - but bound every call
+        // in this loop so a timing fluke can never hang the test instead of
+        // just failing the assertion below.
+        $responses = [];
+        for ($i = 0; $i < 10 && count($responses) < 3; $i++) {
+            $loop->tick(0.2);
+            $responses = array_merge($responses, $clientSocket->readAvailable(0.2));
+        }
+
+        $byId = [];
+        foreach ($responses as $response) {
+            $byId[$response->id] = $response->payload;
+        }
+
+        $this->assertSame([
+            'task-1' => ['n' => 1],
+            'task-2' => ['n' => 2],
+            'task-3' => ['n' => 3],
+        ], $byId);
+
+        fclose($clientEnd);
     }
 }
