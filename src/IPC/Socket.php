@@ -4,21 +4,19 @@ declare(strict_types=1);
 
 namespace App\IPC;
 
-use App\Protocol\LengthPrefixedProtocol;
 use App\Protocol\MalformedMessageException;
 use App\Protocol\Message;
+use App\Protocol\MessageDecoder;
+use App\Protocol\MessageEncoder;
 
-final class Socket
+final readonly class Socket
 {
-    /** @var resource */
-    private mixed $socket;
-    private LengthPrefixedProtocol $protocol;
-
-    /** @param resource $socket */
-    public function __construct(mixed $socket)
-    {
-        $this->socket = $socket;
-        $this->protocol = new LengthPrefixedProtocol();
+    public function __construct(
+        /** @var resource */
+        private mixed $socket,
+        private MessageEncoder $encoder = new MessageEncoder(),
+        private MessageDecoder $decoder = new MessageDecoder(),
+    ) {
     }
 
     /** @return resource */
@@ -39,7 +37,7 @@ final class Socket
     public function read(): array
     {
         while (true) {
-            $messages = $this->protocol->decode($this->readChunk());
+            $messages = $this->decoder->decode($this->readChunk());
 
             if ($messages !== []) {
                 return $messages;
@@ -63,11 +61,17 @@ final class Socket
         $write = [];
         $except = [];
 
+        // stream_select() returns the count of streams that became ready;
+        // with exactly one candidate socket, anything other than 1 means it
+        // didn't become readable within the timeout. The `@` swallows the
+        // "Interrupted system call" warning stream_select can raise if an
+        // unrelated OS signal arrives mid-call — harmless here, we just
+        // treat it the same as "nothing ready yet".
         if (@stream_select($read, $write, $except, 0, $timeoutMicroseconds) !== 1) {
             return [];
         }
 
-        return $this->protocol->decode($this->readChunk());
+        return $this->decoder->decode($this->readChunk());
     }
 
     private function readChunk(): string
@@ -87,7 +91,11 @@ final class Socket
 
     public function write(Message $message): void
     {
-        fwrite($this->socket, $this->protocol->encode($message));
+        // Writing to a peer that's already gone raises a "Broken pipe"
+        // warning; the `@` suppresses it. That case is already handled on
+        // the read side — the next read on this socket throws
+        // ConnectionClosedException — so there's nothing more to do here.
+        @fwrite($this->socket, $this->encoder->encode($message));
     }
 
     public function close(): void

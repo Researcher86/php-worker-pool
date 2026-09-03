@@ -4,7 +4,6 @@ declare(ticks = 1);
 
 namespace App\Worker;
 
-use App\IPC\SocketPair;
 use App\Protocol\Message;
 use App\Protocol\MessageType;
 
@@ -13,40 +12,18 @@ final class WorkerPool
     /** @var array<int, WorkerProcess> */
     private array $workers = [];
 
-    public function __construct(int $workerCount)
+    /**
+     * $launcher defaults to actually forking a process — pass a test double
+     * to get workers backed by a plain socket pair instead, with no real
+     * process involved (see WorkerLauncher).
+     */
+    public function __construct(int $workerCount, ?WorkerLauncher $launcher = new ForkedWorkerLauncher())
     {
         for ($i = 0; $i < $workerCount; $i++) {
-            $worker = $this->createWorker();
+            $worker = $launcher->launch();
 
             $this->workers[$worker->getPid()] = $worker;
         }
-    }
-
-    /**
-     * Forks a child process that runs the worker loop and never returns.
-     * Builds and returns the parent-side WorkerProcess for the new child.
-     */
-    private function createWorker(): WorkerProcess
-    {
-        $socketPair = new SocketPair();
-
-        $pid = pcntl_fork();
-        if ($pid === -1) {
-            die('fork failed');
-        }
-
-        if ($pid === 0) {
-            $socketPair->closeMaster();
-
-            $runner = new WorkerRunner($socketPair->getWorkerSocket());
-            $runner->run();
-
-            exit(0);
-        }
-
-        $socketPair->closeWorker();
-
-        return new WorkerProcess($pid, $socketPair->getMasterSocket());
     }
 
     public function count(): int
@@ -81,6 +58,10 @@ final class WorkerPool
 
     public function stop(): void
     {
+        // Pass 1: tell every still-connected worker to shut down and close
+        // our end of its socket. A worker already DEAD (its process is gone,
+        // see Dispatcher/ConnectionClosedException) skips the shutdown
+        // message — there's nothing left to send it to.
         foreach ($this->workers as $worker) {
             if ($worker->getState() !== WorkerState::DEAD) {
                 $worker->stop();
@@ -90,6 +71,11 @@ final class WorkerPool
             $worker->close();
         }
 
+        // pcntl_waitpid(-1, ...) reaps whichever child exits next, not a
+        // specific pid, so there's no way to know which WorkerProcess it
+        // belonged to. Reap everyone first, then mark every worker DEAD in
+        // a second pass below — by the time we get there all of them really
+        // are gone.
         while (pcntl_waitpid(-1, $status) !== -1) {
             // reap all children
         }

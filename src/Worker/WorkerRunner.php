@@ -22,6 +22,10 @@ final readonly class WorkerRunner
             try {
                 $messages = $this->socket->read();
             } catch (ConnectionClosedException) {
+                // The master's end of the socket went away (process killed,
+                // crashed, etc.) without ever sending SHUTDOWN. Exit the same
+                // way we would have on an explicit shutdown, just without a
+                // message to reply "goodbye" to.
                 $this->close();
                 return;
             }

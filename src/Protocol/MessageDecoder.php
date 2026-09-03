@@ -17,6 +17,15 @@ final class MessageDecoder
      * Feeds raw bytes and returns all complete messages found so far.
      * Partial leftovers stay in the internal buffer until more data arrives.
      *
+     * Reverses the [4-byte size][size bytes of JSON] framing documented on
+     * MessageEncoder::encode(). A single call to decode() can contain zero,
+     * one, or several messages back to back (e.g. a socket read pulling in
+     * more than one queued response at once), so this walks the buffer with
+     * an `$offset` cursor rather than assuming one message per call, and
+     * only rewrites $buffer once at the end (re-slicing it after every
+     * message, instead of once per decode() call, would be quadratic for a
+     * buffer holding many messages).
+     *
      * @return list<Message>
      *
      * @throws \JsonException
@@ -40,7 +49,7 @@ final class MessageDecoder
             }
 
             if ($length - $offset < 4 + $size) {
-                break; // wait for the rest of the message
+                break; // rest of this message hasn't arrived yet
             }
 
             $payload = substr($this->buffer, $offset + 4, $size);

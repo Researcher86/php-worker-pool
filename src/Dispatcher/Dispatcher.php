@@ -71,12 +71,20 @@ final class Dispatcher
         $responses = [];
         while ($pending !== []) {
             foreach ($this->waitForActivity() as $message) {
+                // Only keep responses for requests this call submitted —
+                // guards against a stray/duplicate message with an id we
+                // aren't tracking ever ending up in the returned list.
                 if (isset($pending[$message->id])) {
                     unset($pending[$message->id]);
                     $responses[] = $message;
                 }
             }
 
+            // A worker can die while holding a request (see watch() below);
+            // when that happens its response will never arrive. If nothing
+            // is queued and no worker socket is being watched, there is
+            // nothing left that could ever resolve the remaining pending
+            // ids — waiting again would block forever, so bail instead.
             if ($pending !== [] && $this->queue->isEmpty() && !$this->loop->hasReadable()) {
                 throw new UnresolvedRequestsException(array_keys($pending));
             }
@@ -108,24 +116,30 @@ final class Dispatcher
      * Registers a worker's socket with the event loop for as long as it is
      * busy. The handler reads whatever became available, finishes the request
      * once its response has arrived, and deregisters the socket once the
-     * worker is no longer busy (finished or dead) — a partial read leaves it
-     * registered so the next readable event picks up the rest.
+     * worker is no longer busy (finished or dead) — a partial read (message
+     * not fully received yet) leaves it registered so the next readable
+     * event picks up the rest.
      */
     private function watch(WorkerProcess $worker): void
     {
-        $this->loop->addReadable($worker->getResource(), function () use ($worker): void {
+        $resource = $worker->getResource();
+
+        $this->loop->addReadable($resource, function () use ($worker, $resource): void {
             try {
                 foreach ($worker->readAvailable() as $message) {
                     if ($worker->getCurrentRequestId() === $message->id) {
                         $worker->finishRequest();
-                        $this->loop->removeReadable($worker->getResource());
+                        $this->loop->removeReadable($resource);
                     }
 
                     $this->collected[] = $message;
                 }
             } catch (ConnectionClosedException) {
+                // The worker process is gone. Stop watching its socket —
+                // nothing will ever become readable on it again — and let
+                // run()'s stall check notice its request can't be answered.
                 $worker->markDead();
-                $this->loop->removeReadable($worker->getResource());
+                $this->loop->removeReadable($resource);
             }
         });
     }

@@ -7,6 +7,25 @@ namespace App\Worker;
 use App\IPC\Socket;
 use App\Protocol\Message;
 
+/**
+ * Master-side handle for one worker process: its pid, its socket, and its
+ * lifecycle state.
+ *
+ * State machine (see WorkerState):
+ *
+ *   STARTING ──beginRequest()──> BUSY ──finishRequest()──> IDLE
+ *      │                          │  ↑____________________/
+ *      │                          │        beginRequest()
+ *      └──────────stop()──────────┴──────────stop()──────────> STOPPING
+ *
+ *   any state except DEAD ──markDead()──> DEAD (terminal, no way out)
+ *
+ * "Available" (isAvailable()) means STARTING or IDLE — the two states from
+ * which a new request may be dispatched, and also the only states from
+ * which stop() would normally be requested during a graceful shutdown
+ * (stop() still allows BUSY/STOPPING so shutdown is never blocked by a
+ * worker that's mid-request or already stopping).
+ */
 final class WorkerProcess
 {
     private const array AVAILABLE_STATES = [WorkerState::STARTING, WorkerState::IDLE];

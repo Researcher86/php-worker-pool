@@ -9,6 +9,7 @@ use App\Dispatcher\UnresolvedRequestsException;
 use App\Protocol\Message;
 use App\Protocol\MessageType;
 use App\Queue\RequestQueue;
+use App\Tests\Worker\FakeWorkerLauncher;
 use App\Worker\WorkerPool;
 use PHPUnit\Framework\TestCase;
 
@@ -77,6 +78,56 @@ final class DispatcherTest extends TestCase
         posix_kill($workerId, SIGKILL);
 
         $dispatcher = new Dispatcher(new RequestQueue(), $pool);
+
+        try {
+            $this->expectException(UnresolvedRequestsException::class);
+
+            $dispatcher->run([
+                new Message(MessageType::REQUEST, 'req-1'),
+            ]);
+        } finally {
+            $pool->stop();
+        }
+    }
+
+    /**
+     * Same dispatch/queue/matching logic as the tests above, but exercised
+     * without pcntl_fork at all — WorkerLauncher makes that possible: a fake
+     * launcher hands WorkerPool a real socket pair with no process behind it,
+     * and the test plays "the worker" by writing directly to its end.
+     */
+    public function testRespondsWithoutForkingARealWorkerProcess(): void
+    {
+        $launcher = new FakeWorkerLauncher();
+        $pool = new WorkerPool(1, $launcher);
+        $dispatcher = new Dispatcher(new RequestQueue(), $pool);
+
+        $launcher->workerEnds()[0]->write(new Message(MessageType::RESPONSE, 'req-1', ['answer' => 42]));
+
+        $responses = $dispatcher->run([
+            new Message(MessageType::REQUEST, 'req-1'),
+        ]);
+
+        $this->assertCount(1, $responses);
+        $this->assertSame('req-1', $responses[0]->id);
+        $this->assertSame(['answer' => 42], $responses[0]->payload);
+
+        $pool->stop();
+    }
+
+    /**
+     * The same scenario as testWorkerDyingMidRequestThrowsInsteadOfHanging
+     * above, but deterministic: no pcntl_fork, no posix_kill, no OS-timing
+     * race between a clean EOF and a broken-pipe error to worry about —
+     * just closing the fake worker's end of the pair.
+     */
+    public function testWorkerDyingMidRequestThrowsInsteadOfHangingWithoutForkingOrSignals(): void
+    {
+        $launcher = new FakeWorkerLauncher();
+        $pool = new WorkerPool(1, $launcher);
+        $dispatcher = new Dispatcher(new RequestQueue(), $pool);
+
+        $launcher->workerEnds()[0]->close();
 
         try {
             $this->expectException(UnresolvedRequestsException::class);

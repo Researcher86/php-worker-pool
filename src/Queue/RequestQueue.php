@@ -8,6 +8,10 @@ use App\Protocol\Message;
 
 /**
  * FIFO queue of requests awaiting dispatch to a free worker.
+ *
+ * A thin wrapper over SplQueue rather than using it directly: SplQueue holds
+ * mixed values, this holds only Message — giving callers a typed queue
+ * without them having to know the underlying implementation is an SplQueue.
  */
 final class RequestQueue
 {
