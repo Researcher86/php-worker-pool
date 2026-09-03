@@ -46,20 +46,28 @@ final readonly class Socket
     }
 
     /**
-     * Polls the socket once without blocking and returns whatever complete
-     * messages are currently available. Returns empty array if nothing arrived
-     * within the timeout.
+     * Polls the socket once and returns whatever complete messages are
+     * currently available, waiting up to $timeoutSeconds for the socket to
+     * become readable (0, the default, means "don't wait at all"). Returns
+     * an empty array if nothing arrived within the timeout.
      *
      * @return list<Message>
      *
      * @throws MalformedMessageException
      * @throws ConnectionClosedException
      */
-    public function readAvailable(int $timeoutMicroseconds = 0): array
+    public function readAvailable(float $timeoutSeconds = 0.0): array
     {
         $read = [$this->socket];
         $write = [];
         $except = [];
+
+        // stream_select()'s timeout is a whole-seconds part plus a
+        // microseconds remainder (the microseconds argument alone can't
+        // safely represent multi-second waits), so split $timeoutSeconds
+        // into both.
+        $seconds = (int) $timeoutSeconds;
+        $microseconds = (int) (($timeoutSeconds - $seconds) * 1_000_000);
 
         // stream_select() returns the count of streams that became ready;
         // with exactly one candidate socket, anything other than 1 means it
@@ -67,7 +75,7 @@ final readonly class Socket
         // "Interrupted system call" warning stream_select can raise if an
         // unrelated OS signal arrives mid-call — harmless here, we just
         // treat it the same as "nothing ready yet".
-        if (@stream_select($read, $write, $except, 0, $timeoutMicroseconds) !== 1) {
+        if (@stream_select($read, $write, $except, $seconds, $microseconds) !== 1) {
             return [];
         }
 

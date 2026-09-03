@@ -939,13 +939,29 @@ $response = $client->call(
 
 ## Tasks
 
-* [ ] Connect to Unix Socket
-* [ ] Encode request
-* [ ] Send request
-* [ ] Wait for response
-* [ ] Decode response
-* [ ] Handle connection errors
-* [ ] Handle timeouts
+* [x] Connect to Unix Socket
+* [x] Encode request — reuses IPC/Socket + Protocol/MessageEncoder, same as
+      the Master side
+* [x] Send request
+* [x] Wait for response — bounded by $timeoutSeconds (default 5s), not an
+      unbounded block; composes Socket::readAvailable() in a loop rather
+      than Socket::read()'s indefinite wait (fine for a worker, wrong for a
+      client that must not hang a PHP-FPM request forever)
+* [x] Decode response
+* [x] Handle connection errors — ConnectionFailedException
+* [x] Handle timeouts — RequestTimedOutException
+
+Note: `call(string $action, array $params)`'s worker-side handling is purely
+illustrative right now - WorkerRunner's demo handler just echoes back
+whatever payload it received (see Worker/WorkerRunner.php), there's no real
+per-action routing/business logic implemented anywhere. That's outside what
+this phase (or any phase in this plan) asks for.
+
+Socket::readAvailable() changed from an int-microseconds timeout to a float-
+seconds one while implementing this - the old signature couldn't safely
+represent multi-second waits, and this client needs up to $timeoutSeconds
+(seconds, not micro-). Every other caller already used the 0/default
+non-blocking poll, so this is not a behavior change for them.
 
 ## Supported Environments
 
@@ -960,6 +976,12 @@ Other PHP Processes
 ## Definition of Done
 
 The same client library works in both PHP-FPM and CLI.
+
+Verified live: bin/client.php against a real running bin/server.php gets a
+real round-trip response; pointing WorkerPoolClient at a socket nothing is
+listening on throws ConnectionFailedException; a server that reads the
+request but never replies throws RequestTimedOutException after the
+configured timeout (see WorkerPoolClientTest).
 
 ---
 
