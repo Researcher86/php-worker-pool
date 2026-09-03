@@ -768,12 +768,12 @@ MASTER
 
 ## Tasks
 
-* [ ] Create Unix Domain Socket
-* [ ] Start socket server
-* [ ] Accept connections
-* [ ] Set sockets to non-blocking mode
-* [ ] Remove socket file during shutdown
-* [ ] Handle stale socket file on startup
+* [x] Create Unix Domain Socket
+* [x] Start socket server
+* [x] Accept connections
+* [x] Set sockets to non-blocking mode
+* [x] Remove socket file during shutdown
+* [x] Handle stale socket file on startup
 
 ## Definition of Done
 
