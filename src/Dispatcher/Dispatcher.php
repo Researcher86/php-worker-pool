@@ -51,11 +51,23 @@ final class Dispatcher
     /**
      * Dispatch event: queue a request and push as much work as possible onto
      * the currently idle workers.
+     *
+     * @return bool false if the queue is at its configured limit and the
+     *         request was rejected instead of queued (see RequestQueue) -
+     *         the caller decides what a rejection means for whoever sent it.
      */
-    public function dispatch(Message $request): void
+    public function dispatch(Message $request): bool
     {
+        if ($this->queue->isFull()) {
+            $this->queue->recordRejection();
+
+            return false;
+        }
+
         $this->queue->enqueue($request);
         $this->pump();
+
+        return true;
     }
 
     /**

@@ -9,4 +9,5 @@ enum MessageType: string
     case REQUEST = 'request';
     case RESPONSE = 'response';
     case SHUTDOWN = 'shutdown';
+    case ERROR = 'error';
 }

@@ -43,4 +43,39 @@ final class RequestQueueTest extends TestCase
 
         $this->assertTrue($this->queue->isEmpty());
     }
+
+    public function testIsNeverFullWithoutAConfiguredLimit(): void
+    {
+        for ($i = 0; $i < 100; $i++) {
+            $this->queue->enqueue(new Message(MessageType::REQUEST, "req-$i"));
+        }
+
+        $this->assertFalse($this->queue->isFull());
+    }
+
+    public function testIsFullOnceItReachesTheConfiguredLimit(): void
+    {
+        $queue = new RequestQueue(2);
+
+        $this->assertFalse($queue->isFull());
+
+        $queue->enqueue(new Message(MessageType::REQUEST, 'req-1'));
+        $this->assertFalse($queue->isFull());
+
+        $queue->enqueue(new Message(MessageType::REQUEST, 'req-2'));
+        $this->assertTrue($queue->isFull());
+
+        $queue->dequeue();
+        $this->assertFalse($queue->isFull());
+    }
+
+    public function testRejectedCountStartsAtZeroAndTracksRecordRejection(): void
+    {
+        $this->assertSame(0, $this->queue->rejectedCount());
+
+        $this->queue->recordRejection();
+        $this->queue->recordRejection();
+
+        $this->assertSame(2, $this->queue->rejectedCount());
+    }
 }

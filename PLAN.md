@@ -1048,14 +1048,26 @@ Reject Request
 
 ## Tasks
 
-* [ ] Configure maximum queue size
-* [ ] Reject requests when full
-* [ ] Track rejected requests
-* [ ] Add queue metrics
+* [x] Configure maximum queue size — RequestQueue(?int $maxSize), Master
+      sets it to 10,000 (this phase's own example value)
+* [x] Reject requests when full — Dispatcher::dispatch() now returns bool;
+      Master writes the client an ERROR message on false instead of
+      queueing forever
+* [x] Track rejected requests — RequestQueue::rejectedCount()
+* [x] Add queue metrics — RequestQueue::size()/rejectedCount() are readable
+      now; nothing surfaces them anywhere yet (no endpoint, no logging) -
+      that's Phase 17 (Metrics), not this one
 
 ## Definition of Done
 
 The Master survives overload without uncontrolled memory growth.
+
+Verified: unit tests fill a size-limited queue and confirm the next
+dispatch() is rejected and counted (see DispatcherTest,
+RequestQueueTest); the ERROR frame's wire format was checked byte-for-byte
+against this phase's own JSON example
+(`{"type":"error","id":"req-1","payload":{"error":"server_overloaded"}}`)
+and round-trips through the same encoder/decoder as every other message.
 
 ---
 

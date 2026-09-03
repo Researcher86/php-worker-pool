@@ -174,4 +174,32 @@ final class DispatcherTest extends TestCase
 
         $pool->stop();
     }
+
+    /**
+     * Backpressure (PLAN.md Phase 13): once the queue is at its configured
+     * limit, dispatch() rejects instead of growing it further. Master.php
+     * uses the false return to send the client a server_overloaded error
+     * instead of leaving it waiting for a response that will never come.
+     */
+    public function testDispatchRejectsWhenQueueIsFull(): void
+    {
+        $launcher = new FakeWorkerLauncher();
+        $pool = new WorkerPool(1, $launcher);
+        $queue = new RequestQueue(1);
+        $dispatcher = new Dispatcher($queue, $pool);
+
+        // Goes straight to the only worker - the queue itself stays empty.
+        $this->assertTrue($dispatcher->dispatch(new Message(MessageType::REQUEST, 'req-1')));
+
+        // The worker is now busy (never responds), so this one fills the
+        // queue's single slot instead.
+        $this->assertTrue($dispatcher->dispatch(new Message(MessageType::REQUEST, 'req-2')));
+
+        // Nowhere left for a third request to go.
+        $this->assertFalse($dispatcher->dispatch(new Message(MessageType::REQUEST, 'req-3')));
+
+        $this->assertSame(1, $queue->rejectedCount());
+
+        $pool->stop();
+    }
 }

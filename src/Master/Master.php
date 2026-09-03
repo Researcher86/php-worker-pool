@@ -10,6 +10,7 @@ use App\Client\PendingRequestRegistry;
 use App\Dispatcher\Dispatcher;
 use App\EventLoop\EventLoop;
 use App\Protocol\Message;
+use App\Protocol\MessageType;
 use App\Queue\RequestQueue;
 use App\Server\UnixSocketServer;
 use App\Worker\WorkerPool;
@@ -17,6 +18,11 @@ use App\Worker\WorkerPool;
 final class Master
 {
     private const SOCKET_PATH = '/tmp/php-worker-pool.sock';
+
+    // PLAN.md Phase 13's example limit - past this many requests waiting for
+    // a free worker, the queue would just grow unbounded under sustained
+    // overload instead of applying backpressure.
+    private const MAX_QUEUE_SIZE = 10_000;
 
     private bool $running = true;
 
@@ -30,15 +36,20 @@ final class Master
         // under, not the client's original id - resolve() maps back to
         // both, so the reply can go out on the right socket under the id
         // that client is actually expecting.
-        $dispatcher = new Dispatcher(new RequestQueue(), $pool, $loop, function (Message $response) use ($pendingRequests): void {
-            $pending = $pendingRequests->resolve($response->id);
+        $dispatcher = new Dispatcher(
+            new RequestQueue(self::MAX_QUEUE_SIZE),
+            $pool,
+            $loop,
+            function (Message $response) use ($pendingRequests): void {
+                $pending = $pendingRequests->resolve($response->id);
 
-            if ($pending === null) {
-                return; // unknown or already-handled id - nothing to route it to
+                if ($pending === null) {
+                    return; // unknown or already-handled id - nothing to route it to
+                }
+
+                $pending->client->write(new Message($response->type, $pending->originalId, $response->payload));
             }
-
-            $pending->client->write(new Message($response->type, $pending->originalId, $response->payload));
-        });
+        );
 
         // Each client request is dispatched under a Master-assigned id
         // (see PendingRequestRegistry) rather than the client's own, so two
@@ -47,7 +58,12 @@ final class Master
         $clients = new ClientRegistry($loop, function (ClientConnection $client, Message $request) use ($dispatcher, $pendingRequests): void {
             $dispatchId = $pendingRequests->register($client, $request->id);
 
-            $dispatcher->dispatch(new Message($request->type, $dispatchId, $request->payload));
+            $dispatched = $dispatcher->dispatch(new Message($request->type, $dispatchId, $request->payload));
+
+            if (!$dispatched) {
+                $pendingRequests->resolve($dispatchId); // never actually dispatched - nothing to route a response to later
+                $client->write(new Message(MessageType::ERROR, $request->id, ['error' => 'server_overloaded']));
+            }
         });
 
         $server = new UnixSocketServer(self::SOCKET_PATH, $loop, $clients->accept(...));
