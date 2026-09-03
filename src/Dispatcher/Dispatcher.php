@@ -8,6 +8,7 @@ use App\EventLoop\EventLoop;
 use App\IPC\ConnectionClosedException;
 use App\Protocol\MalformedMessageException;
 use App\Protocol\Message;
+use App\Protocol\MessageType;
 use App\Queue\RequestQueue;
 use App\Worker\WorkerPool;
 use App\Worker\WorkerProcess;
@@ -160,11 +161,27 @@ final class Dispatcher
                     ($this->onResponse)($message);
                 }
             } catch (ConnectionClosedException) {
-                // The worker process is gone. Stop watching its socket —
-                // nothing will ever become readable on it again — and let
-                // run()'s stall check notice its request can't be answered.
+                // The worker process is gone (PLAN.md Phase 15). Capture
+                // before markDead() clears it — WorkerPool::reapDeadWorkers()
+                // may independently detect and report the same crash via
+                // SIGCHLD; whichever of the two gets here first is the one
+                // that actually has a non-null id to report, the other just
+                // sees it already cleared and does nothing extra.
+                $requestId = $worker->getCurrentRequestId();
                 $worker->markDead();
                 $this->loop->removeReadable($resource);
+
+                // run()'s stall check handles this for the batch API (no
+                // request id needed there — it just notices nothing is
+                // watched or queued anymore). The event-driven API has no
+                // equivalent poll to fall back on, so synthesize a response
+                // here instead: onResponse is already "something happened to
+                // this request id" for Master, whether it's a real worker
+                // reply or, as here, an error standing in for one that will
+                // never arrive.
+                if ($requestId !== null) {
+                    ($this->onResponse)(new Message(MessageType::ERROR, $requestId, ['error' => 'worker_crashed']));
+                }
             }
         });
     }

@@ -1201,15 +1201,39 @@ Retry if operation is retryable
 
 ## Tasks
 
-* [ ] Handle SIGCHLD
-* [ ] Detect dead workers
-* [ ] Remove worker
-* [ ] Fail active request
-* [ ] Start replacement worker
+* [x] Handle SIGCHLD — Master registers a handler alongside SIGINT/SIGTERM
+* [x] Detect dead workers — WorkerPool::reapDeadWorkers() (WNOHANG, so it
+      never blocks and is safe to call from the signal handler); this also
+      catches an IDLE worker crashing, which Dispatcher's read-based
+      detection can't see at all (it only watches busy workers)
+* [x] Remove worker
+* [x] Fail active request — two independent, redundant paths, whichever
+      notices first "wins" (PendingRequestRegistry::resolve() is one-shot,
+      so a second attempt is a harmless no-op): SIGCHLD via
+      WorkerPool::reapDeadWorkers() catches it however busy/idle the worker
+      was; Dispatcher::watch() catching ConnectionClosedException catches
+      it specifically for a busy worker, usually just as fast, via the
+      worker's own socket going to EOF. Client gets
+      {"type":"error","payload":{"error":"worker_crashed"}}
+* [x] Start replacement worker — reapDeadWorkers() launches one immediately,
+      unless the pool is mid-stop() (would just orphan it)
+
+Active Request Strategy: "Return Error" (this phase's "Initially") is what's
+implemented. "Retry if operation is retryable" (this phase's "Later") is not
+- retrying changes request semantics (only safe for idempotent operations,
+which nothing in this codebase currently distinguishes) and isn't asked for
+by this phase's own Definition of Done.
 
 ## Definition of Done
 
 The Worker Pool automatically recovers after a Worker crash.
+
+Verified live: killing a real worker process mid-run (docker `kill -9`) —
+the pool replaced it within about a second and kept serving requests
+normally afterward; unit tests cover both an idle worker crashing
+(WorkerPoolTest) and a busy one crashing mid-request, confirming the
+synthesized worker_crashed response carries the right request id
+(DispatcherTest).
 
 ---
 

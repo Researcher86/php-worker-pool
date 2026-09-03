@@ -9,6 +9,7 @@ use App\Protocol\Message;
 use App\Protocol\MessageType;
 use App\Queue\RequestQueue;
 use App\Worker\WorkerPool;
+use App\Worker\WorkerState;
 use PHPUnit\Framework\TestCase;
 
 final class WorkerPoolTest extends TestCase
@@ -70,6 +71,41 @@ final class WorkerPoolTest extends TestCase
 
         $this->assertCount(1, $responses);
         $this->assertSame($workerId, $pool->getAvailable());
+
+        $pool->stop();
+    }
+
+    /**
+     * PLAN.md Phase 15: a worker can crash outright (not just drop its
+     * connection while busy - see DispatcherTest for that case).
+     * reapDeadWorkers() is what a SIGCHLD handler calls; it isn't tied to a
+     * signal actually firing, so this drives it directly.
+     */
+    public function testReapDeadWorkersRemovesAndReplacesACrashedWorker(): void
+    {
+        if (!function_exists('pcntl_fork') || !function_exists('posix_kill')) {
+            $this->markTestSkipped('pcntl and posix extensions required');
+        }
+
+        $pool = new WorkerPool(2);
+        $deadWorkerId = $pool->getAvailable();
+        $this->assertNotNull($deadWorkerId);
+
+        posix_kill($deadWorkerId, SIGKILL);
+
+        // Give the kernel a moment to actually finish the exit so waitpid()
+        // has something to reap; reapDeadWorkers() itself never blocks.
+        usleep(100_000);
+
+        $crashes = $pool->reapDeadWorkers();
+
+        $this->assertCount(1, $crashes);
+        $this->assertSame($deadWorkerId, $crashes[0]->worker->getPid());
+        $this->assertNull($crashes[0]->lostRequestId); // it was idle, not mid-request
+        $this->assertSame(WorkerState::DEAD, $crashes[0]->worker->getState());
+
+        // Pool stays at its configured size - the crashed one was replaced.
+        $this->assertSame(2, $pool->count());
 
         $pool->stop();
     }

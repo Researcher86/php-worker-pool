@@ -17,21 +17,21 @@ use App\Worker\WorkerPool;
 
 final class Master
 {
-    private const SOCKET_PATH = '/tmp/php-worker-pool.sock';
+    private const string SOCKET_PATH = '/tmp/php-worker-pool.sock';
 
     // PLAN.md Phase 13's example limit - past this many requests waiting for
     // a free worker, the queue would just grow unbounded under sustained
     // overload instead of applying backpressure.
-    private const MAX_QUEUE_SIZE = 10_000;
+    private const int MAX_QUEUE_SIZE = 10_000;
 
     // PLAN.md Phase 14: how long a client waits for a response before the
     // Master gives up on its behalf and reports a timeout instead.
-    private const REQUEST_TIMEOUT_SECONDS = 30.0;
+    private const float REQUEST_TIMEOUT_SECONDS = 30.0;
 
     // How often the main loop wakes up (even with no socket activity at
     // all) to sweep for expired requests. Bounds how late a timeout can be
     // detected, not how precisely - see PendingRequestRegistry::removeExpired().
-    private const TIMEOUT_CHECK_INTERVAL_SECONDS = 1.0;
+    private const float TIMEOUT_CHECK_INTERVAL_SECONDS = 1.0;
 
     private bool $running = true;
 
@@ -83,6 +83,25 @@ final class Master
         pcntl_async_signals(true);
         pcntl_signal(SIGINT, $this->stop(...));
         pcntl_signal(SIGTERM, $this->stop(...));
+
+        // PLAN.md Phase 15: a worker can die on its own (crash, OOM-kill,
+        // ...) without ever touching its socket - an idle one wouldn't be
+        // noticed by Dispatcher's read-based detection at all, since it's
+        // only watching busy workers. SIGCHLD catches it immediately either
+        // way and keeps the pool at full strength.
+        pcntl_signal(SIGCHLD, function () use ($pool, $pendingRequests): void {
+            foreach ($pool->reapDeadWorkers() as $crash) {
+                if ($crash->lostRequestId === null) {
+                    continue;
+                }
+
+                $pending = $pendingRequests->resolve($crash->lostRequestId);
+
+                if ($pending !== null) {
+                    $pending->client->write(new Message(MessageType::ERROR, $pending->originalId, ['error' => 'worker_crashed']));
+                }
+            }
+        });
 
         try {
             // Accept client connections until a shutdown signal arrives. The

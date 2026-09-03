@@ -202,4 +202,39 @@ final class DispatcherTest extends TestCase
 
         $pool->stop();
     }
+
+    /**
+     * PLAN.md Phase 15's "fail active request": in the event-driven API
+     * there's no stall check to fall back on like run() has, so a worker
+     * dying mid-request must actively synthesize a response instead of
+     * leaving the request pending forever (until Phase 14's timeout, which
+     * is much slower than necessary when the cause is already known).
+     */
+    public function testDispatchReportsWorkerCrashViaOnResponse(): void
+    {
+        $launcher = new FakeWorkerLauncher();
+        $pool = new WorkerPool(1, $launcher);
+        $loop = new EventLoop();
+        $responses = [];
+
+        $dispatcher = new Dispatcher(
+            new RequestQueue(),
+            $pool,
+            $loop,
+            function (Message $message) use (&$responses): void {
+                $responses[] = $message;
+            }
+        );
+
+        $dispatcher->dispatch(new Message(MessageType::REQUEST, 'req-1'));
+        $launcher->workerEnds()[0]->close();
+        $loop->tick();
+
+        $this->assertCount(1, $responses);
+        $this->assertSame(MessageType::ERROR, $responses[0]->type);
+        $this->assertSame('req-1', $responses[0]->id);
+        $this->assertSame(['error' => 'worker_crashed'], $responses[0]->payload);
+
+        $pool->stop();
+    }
 }
