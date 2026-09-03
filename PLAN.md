@@ -517,6 +517,17 @@ $workerCount = 4;
 
 Four Workers can process four requests simultaneously.
 
+**Post-review fix:** `WorkerPool`'s constructor launched its configured
+worker count in a plain loop, so a `launch()` failure partway through
+(`ForkedWorkerLauncher` throws on a failed `pcntl_fork()`, since Phase 20's
+review) propagated straight out of `new WorkerPool(...)` with no
+`WorkerPool` instance for anyone to call `stop()` on - any workers already
+forked in that same construction attempt were orphaned, both the process
+and its socket pair. The constructor now wraps the loop in try/catch: on
+failure it calls `$this->stop(0.0)` on whatever was already launched (kills
+and reaps them) before rethrowing. Covered by `WorkerPoolTest::
+testConstructorStopsAlreadyLaunchedWorkersIfALaterLaunchFails`.
+
 ---
 
 # Phase 6 — Request Queue
@@ -1068,6 +1079,17 @@ RequestQueueTest); the ERROR frame's wire format was checked byte-for-byte
 against this phase's own JSON example
 (`{"type":"error","id":"req-1","payload":{"error":"server_overloaded"}}`)
 and round-trips through the same encoder/decoder as every other message.
+
+**Post-review fix:** `Dispatcher::run()` (the synchronous batch API, not
+used by Master's `dispatch()` event-driven path but still public surface)
+had gained an `isFull()` check ahead of its enqueue loop, but checked it
+only once before the loop rather than against the batch size - a batch
+bigger than the remaining capacity still got enqueued in full, silently
+growing the queue past `maxSize`. `RequestQueue` now has
+`hasCapacityFor(int $additional)`; `run()` checks the whole batch up front
+and rejects atomically (throws before queueing anything) rather than
+partway through. Covered by `DispatcherTest::
+testRunRejectsABatchLargerThanQueueCapacity`.
 
 ---
 

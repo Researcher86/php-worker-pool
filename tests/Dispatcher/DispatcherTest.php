@@ -204,6 +204,39 @@ final class DispatcherTest extends TestCase
     }
 
     /**
+     * Regression test: run() used to check isFull() once before the enqueue
+     * loop, so a batch bigger than the remaining capacity still got
+     * enqueued in full — defeating the whole point of the bounded queue
+     * (Phase 13), which is to never grow past maxSize.
+     */
+    public function testRunRejectsABatchLargerThanQueueCapacity(): void
+    {
+        $launcher = new FakeWorkerLauncher();
+        $pool = new WorkerPool(1, $launcher); // never responds - nothing gets dequeued
+        $queue = new RequestQueue(2);
+        $dispatcher = new Dispatcher($queue, $pool);
+
+        try {
+            $this->expectException(\RuntimeException::class);
+
+            $dispatcher->run([
+                new Message(MessageType::REQUEST, 'req-1'),
+                new Message(MessageType::REQUEST, 'req-2'),
+                new Message(MessageType::REQUEST, 'req-3'),
+            ]);
+        } finally {
+            // Old behavior would have enqueued all 3 (1 dispatched to the
+            // idle worker, 2 left queued) despite maxSize being 2. Rejected
+            // atomically instead — nothing from this batch was queued or
+            // dispatched at all.
+            $this->assertSame(0, $queue->size());
+            $this->assertNotNull($pool->getAvailable());
+
+            $pool->stop();
+        }
+    }
+
+    /**
      * PLAN.md Phase 15's "fail active request": in the event-driven API
      * there's no stall check to fall back on like run() has, so a worker
      * dying mid-request must actively synthesize a response instead of

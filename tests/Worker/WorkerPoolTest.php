@@ -5,6 +5,7 @@ declare(ticks = 1);
 namespace App\Tests\Worker;
 
 use App\Dispatcher\Dispatcher;
+use App\IPC\ConnectionClosedException;
 use App\Protocol\Message;
 use App\Protocol\MessageType;
 use App\Queue\RequestQueue;
@@ -25,6 +26,42 @@ final class WorkerPoolTest extends TestCase
         $this->assertSame(4, $pool->count());
 
         $pool->stop();
+    }
+
+    /**
+     * Regression test: a launch() failure partway through the constructor
+     * (e.g. ForkedWorkerLauncher on a failed pcntl_fork()) used to propagate
+     * straight out, leaving any already-launched workers as orphans with no
+     * WorkerPool left to ever stop() them. The constructor must clean those
+     * up itself before rethrowing.
+     */
+    public function testConstructorStopsAlreadyLaunchedWorkersIfALaterLaunchFails(): void
+    {
+        $launcher = new FailingWorkerLauncher(failOnCall: 3);
+
+        try {
+            new WorkerPool(5, $launcher);
+            $this->fail('expected the launch failure to propagate out of the constructor');
+        } catch (\RuntimeException $e) {
+            $this->assertSame('launch failed', $e->getMessage());
+        }
+
+        // Two workers launched successfully before the third call failed -
+        // both must have been told to shut down (their master-side socket
+        // closed) rather than left dangling as orphans.
+        $workerEnds = $launcher->workerEnds();
+        $this->assertCount(2, $workerEnds);
+
+        foreach ($workerEnds as $workerEnd) {
+            $workerEnd->read(); // drain the SHUTDOWN message stop() sent before closing
+
+            try {
+                $workerEnd->read();
+                $this->fail('expected the master-side socket to have been closed');
+            } catch (ConnectionClosedException) {
+                // expected - stop() closed its end
+            }
+        }
     }
 
     public function testMultipleWorkersProcessRequestsInParallel(): void

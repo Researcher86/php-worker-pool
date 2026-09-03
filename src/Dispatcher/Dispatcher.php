@@ -88,11 +88,15 @@ final class Dispatcher
     {
         // The bounded queue (Phase 13 backpressure) rejects in dispatch() by
         // returning false, but run() returns list<Message> and can't signal a
-        // single rejection - so when the queue is already at its limit, fail
-        // fast rather than silently growing past it. dispatch() keeps that
-        // fine-grained per-request behaviour for the event-driven path.
-        if ($this->queue->isFull()) {
-            throw new \RuntimeException('request queue is already at its configured capacity');
+        // single rejection - so when the whole batch wouldn't fit, fail fast
+        // rather than silently growing past the limit. Checked against the
+        // full batch size up front (not isFull() per iteration) so this
+        // either queues every request or none of them - never leaves a
+        // partial batch sitting in the queue with no way to run() again for
+        // the rest. dispatch() keeps the fine-grained per-request behaviour
+        // for the event-driven path.
+        if (!$this->queue->hasCapacityFor(count($requests))) {
+            throw new \RuntimeException('request queue does not have capacity for this batch');
         }
 
         $pending = [];

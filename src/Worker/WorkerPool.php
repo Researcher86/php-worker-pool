@@ -49,10 +49,23 @@ final class WorkerPool
         private readonly WorkerLauncher $launcher = new ForkedWorkerLauncher(),
         private readonly int $maxWorkers = PHP_INT_MAX,
     ) {
-        for ($i = 0; $i < $workerCount; $i++) {
-            $worker = $this->launcher->launch();
+        try {
+            for ($i = 0; $i < $workerCount; $i++) {
+                $worker = $this->launcher->launch();
 
-            $this->workers[$worker->getPid()] = $worker;
+                $this->workers[$worker->getPid()] = $worker;
+            }
+        } catch (\Throwable $e) {
+            // A launch() partway through (e.g. ForkedWorkerLauncher on a
+            // failed fork) throws out of the constructor entirely, so
+            // $this never reaches the caller - whichever workers already
+            // launched here would otherwise be orphaned processes with
+            // nothing left holding their pid. stop() (safe to call even
+            // with zero workers) kills and reaps them before the failure
+            // propagates.
+            $this->stop(0.0);
+
+            throw $e;
         }
     }
 
