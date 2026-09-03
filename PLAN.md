@@ -799,16 +799,25 @@ Connection State
 
 ## Tasks
 
-* [ ] Create ClientConnection class
-* [ ] Store socket
-* [ ] Store read buffer
-* [ ] Store write buffer
-* [ ] Handle disconnect
-* [ ] Remove dead clients
+* [x] Create ClientConnection class
+* [x] Store socket
+* [x] Store read buffer — provided by Socket's own MessageDecoder buffering
+      (see IPC/Socket.php), no separate buffer needed on ClientConnection
+* [ ] Store write buffer — not implemented; Socket::write() still does a
+      single blind fwrite() with no queuing/retry for a full kernel send
+      buffer. Not exercised yet (nothing writes responses to clients until
+      Phase 11), revisit if/when that becomes a real problem
+* [x] Handle disconnect
+* [x] Remove dead clients — also covers a client sending unparseable bytes
+      (MalformedMessageException), not just a clean disconnect
 
 ## Important
 
 A disconnected client must not crash the Master.
+
+Verified live: a client that disconnects abruptly mid-request, and a client
+that sends malformed framing, both get dropped without affecting the Master
+or other clients/workers (see ClientRegistryTest and a manual end-to-end run).
 
 ## Definition of Done
 

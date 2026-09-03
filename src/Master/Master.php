@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace App\Master;
 
+use App\Client\ClientConnection;
+use App\Client\ClientRegistry;
 use App\EventLoop\EventLoop;
+use App\Protocol\Message;
 use App\Server\UnixSocketServer;
 use App\Worker\WorkerPool;
 
@@ -19,15 +22,13 @@ final class Master
         $pool = new WorkerPool(4);
         $loop = new EventLoop();
 
-        // Phase 10 wires client connections into a Dispatcher (queue +
-        // dispatch to $pool over $loop); for now we only need the socket
-        // accepted for a client to be able to connect.
-        $server = new UnixSocketServer(
-            self::SOCKET_PATH,
-            $loop,
-            function (): void {
-            },
-        );
+        // Phase 11 will route a decoded request through a Dispatcher (queue
+        // + dispatch to $pool) and track it in a pending-requests registry
+        // so the eventual response reaches this same client.
+        $clients = new ClientRegistry($loop, function (ClientConnection $client, Message $message): void {
+        });
+
+        $server = new UnixSocketServer(self::SOCKET_PATH, $loop, $clients->accept(...));
 
         // Catch SIGINT/SIGTERM so the socket file is removed and workers are
         // reaped on shutdown instead of leaving a stale socket behind.
