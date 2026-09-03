@@ -24,6 +24,15 @@ final class Master
     // overload instead of applying backpressure.
     private const MAX_QUEUE_SIZE = 10_000;
 
+    // PLAN.md Phase 14: how long a client waits for a response before the
+    // Master gives up on its behalf and reports a timeout instead.
+    private const REQUEST_TIMEOUT_SECONDS = 30.0;
+
+    // How often the main loop wakes up (even with no socket activity at
+    // all) to sweep for expired requests. Bounds how late a timeout can be
+    // detected, not how precisely - see PendingRequestRegistry::removeExpired().
+    private const TIMEOUT_CHECK_INTERVAL_SECONDS = 1.0;
+
     private bool $running = true;
 
     public function run(): void
@@ -56,7 +65,7 @@ final class Master
         // clients (or one client, by mistake) picking the same id can never
         // misroute a response.
         $clients = new ClientRegistry($loop, function (ClientConnection $client, Message $request) use ($dispatcher, $pendingRequests): void {
-            $dispatchId = $pendingRequests->register($client, $request->id);
+            $dispatchId = $pendingRequests->register($client, $request->id, self::REQUEST_TIMEOUT_SECONDS);
 
             $dispatched = $dispatcher->dispatch(new Message($request->type, $dispatchId, $request->payload));
 
@@ -78,12 +87,19 @@ final class Master
         try {
             // Accept client connections until a shutdown signal arrives. The
             // blocking stream_select() inside tick() returns early on a caught
-            // signal (EINTR), which lets the loop check the flag and exit.
+            // signal (EINTR), which lets the loop check the flag and exit -
+            // and, regardless of a signal, at least once every
+            // TIMEOUT_CHECK_INTERVAL_SECONDS, which is what lets requests
+            // past their deadline actually get noticed.
             // PHPStan's while.alwaysTrue can't see $this->running flip to false
             // because that only happens inside the signal-handler callback.
             // @phpstan-ignore-next-line while.alwaysTrue
             while ($this->running) {
-                $loop->tick();
+                $loop->tick(self::TIMEOUT_CHECK_INTERVAL_SECONDS);
+
+                foreach ($pendingRequests->removeExpired(microtime(true)) as $expired) {
+                    $expired->client->write(new Message(MessageType::ERROR, $expired->originalId, ['error' => 'request_timeout']));
+                }
             }
         } finally {
             $server->close();

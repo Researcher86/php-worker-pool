@@ -50,11 +50,17 @@ final class EventLoop
      * immediately without blocking if nothing is currently registered —
      * callers rely on that to know there's nothing left worth waiting for.
      *
+     * $timeoutSeconds bounds how long that block can last — null (the
+     * default) waits indefinitely. A caller that also needs to notice
+     * something on a schedule (e.g. Master checking for expired requests)
+     * passes a timeout so it regains control periodically even with no
+     * socket activity at all.
+     *
      * A resource whose peer disconnected also counts as "readable" here
      * (reading it just returns EOF instead of data), so a dead peer wakes
      * this up rather than blocking forever.
      */
-    public function tick(): void
+    public function tick(?float $timeoutSeconds = null): void
     {
         if ($this->resources === []) {
             return;
@@ -64,16 +70,23 @@ final class EventLoop
         $write = [];
         $except = [];
 
-        // A null timeout means block for as long as it takes; every caller
-        // here is fine waiting indefinitely for the next event. The `@`
-        // suppresses the "Interrupted system call" warning stream_select()
-        // raises if a signal arrives mid-call (Master relies on exactly
-        // that to wake up and check its shutdown flag on SIGINT/SIGTERM).
-        // On that path $read is left unchanged — still every resource, not
-        // just the ready ones — since the call never completed; that's
-        // harmless here, each handler independently no-ops when there's
-        // nothing actually waiting for it.
-        @stream_select($read, $write, $except, null);
+        // The `@` suppresses the "Interrupted system call" warning
+        // stream_select() raises if a signal arrives mid-call (Master
+        // relies on exactly that to wake up and check its shutdown flag on
+        // SIGINT/SIGTERM). On that path $read is left unchanged — still
+        // every resource, not just the ready ones — since the call never
+        // completed; that's harmless here, each handler independently
+        // no-ops when there's nothing actually waiting for it. A genuine
+        // timeout (no activity, no signal), by contrast, correctly leaves
+        // $read empty.
+        if ($timeoutSeconds === null) {
+            @stream_select($read, $write, $except, null);
+        } else {
+            $seconds = (int) $timeoutSeconds;
+            $microseconds = (int) (($timeoutSeconds - $seconds) * 1_000_000);
+
+            @stream_select($read, $write, $except, $seconds, $microseconds);
+        }
 
         // stream_select() rewrites $read in place to keep only the resources
         // that are actually ready, so this only invokes handlers for those

@@ -16,24 +16,29 @@ namespace App\Client;
  * sees this internal id - resolve() hands back its original one so the
  * response can go out under the id the client is actually expecting.
  *
- * Deliberately holds just id => (client, original id) for now. PLAN.md's
- * Phase 11 sketch also lists Created Time / Worker / Deadline per entry,
- * but nothing in this phase's Definition of Done needs them - they belong
- * to later phases (Timeouts, Metrics). Add them when a phase actually
- * needs them, not before.
+ * Deliberately holds just id => (client, original id, deadline) - PLAN.md's
+ * Phase 11 sketch also lists Worker per entry, but nothing so far needs it
+ * (WorkerProcess already knows its own current request id). Add it when
+ * something actually needs it, not before.
  */
 final class PendingRequestRegistry
 {
     private int $nextId = 1;
 
+    private int $timeoutCount = 0;
+
     /** @var array<string, PendingRequest> */
     private array $pending = [];
 
-    /** Registers $client as awaiting a response and returns the id to dispatch the request under. */
-    public function register(ClientConnection $client, string $originalId): string
+    /**
+     * Registers $client as awaiting a response and returns the id to
+     * dispatch the request under. $timeoutSeconds from now, the entry
+     * becomes eligible for removeExpired() to reclaim.
+     */
+    public function register(ClientConnection $client, string $originalId, float $timeoutSeconds): string
     {
         $id = 'req-' . $this->nextId++;
-        $this->pending[$id] = new PendingRequest($client, $originalId);
+        $this->pending[$id] = new PendingRequest($client, $originalId, microtime(true) + $timeoutSeconds);
 
         return $id;
     }
@@ -50,8 +55,37 @@ final class PendingRequestRegistry
         return $entry;
     }
 
+    /**
+     * Removes and returns every entry whose deadline is at or before $now,
+     * counting each as a timeout. A plain scan over every pending entry -
+     * PLAN.md's own "Future Improvement" note for this phase says a timer
+     * heap belongs here eventually, once scanning stops being cheap enough.
+     *
+     * @return list<PendingRequest>
+     */
+    public function removeExpired(float $now): array
+    {
+        $expired = [];
+
+        foreach ($this->pending as $id => $entry) {
+            if ($entry->deadline <= $now) {
+                $expired[] = $entry;
+                unset($this->pending[$id]);
+            }
+        }
+
+        $this->timeoutCount += count($expired);
+
+        return $expired;
+    }
+
     public function count(): int
     {
         return count($this->pending);
+    }
+
+    public function timeoutCount(): int
+    {
+        return $this->timeoutCount;
     }
 }

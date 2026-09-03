@@ -105,4 +105,31 @@ final class EventLoopTest extends TestCase
 
         $this->assertSame(['b'], $calledFor);
     }
+
+    /**
+     * The mechanism Master (Phase 14) relies on to notice expired requests
+     * even with no client/worker activity at all: tick() must actually
+     * return once $timeoutSeconds elapses, not block indefinitely.
+     */
+    public function testTickWithTimeoutReturnsWhenNothingBecomesReadable(): void
+    {
+        // Keep $writeEnd alive (even though nothing is written to it): if it
+        // were garbage collected, its side of the pair would close, and the
+        // read end would see that as an immediate EOF - readable right
+        // away, defeating the point of this test.
+        [$readEnd, $writeEnd] = $this->pair();
+
+        $invoked = false;
+        $this->loop->addReadable($readEnd, function () use (&$invoked): void {
+            $invoked = true;
+        });
+
+        $start = microtime(true);
+        $this->loop->tick(0.2); // nobody writes anything - this must time out
+        $elapsed = microtime(true) - $start;
+
+        $this->assertFalse($invoked);
+        $this->assertGreaterThanOrEqual(0.2, $elapsed);
+        $this->assertLessThan(2.0, $elapsed); // generous upper bound, just proving it didn't block forever
+    }
 }

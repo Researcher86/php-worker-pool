@@ -1101,11 +1101,18 @@ Deadline: 10:00:05
 
 ## Tasks
 
-* [ ] Add request deadline
-* [ ] Detect expired requests
-* [ ] Return timeout response
-* [ ] Remove pending request
-* [ ] Track timeout metrics
+* [x] Add request deadline — PendingRequest::$deadline, set at register()
+      time from a configurable per-request timeout (Master:
+      REQUEST_TIMEOUT_SECONDS = 30s)
+* [x] Detect expired requests — PendingRequestRegistry::removeExpired(),
+      swept once per second by Master's main loop (see EventLoop::tick()'s
+      new optional timeout - it now returns on a schedule even with zero
+      socket activity, not just on real events or a signal)
+* [x] Return timeout response — {"type":"error","payload":{"error":
+      "request_timeout"}}, same ERROR convention as Phase 13's overload
+      response, sent under the client's own original id
+* [x] Remove pending request — removeExpired() is one-shot, same as resolve()
+* [x] Track timeout metrics — PendingRequestRegistry::timeoutCount()
 
 ## Future Improvement
 
@@ -1120,6 +1127,12 @@ instead of scanning all requests.
 ## Definition of Done
 
 Clients receive a timeout response when work takes too long.
+
+Verified live: a client whose worker never answers gets
+`{"type":"error","id":"my-id","payload":{"error":"request_timeout"}}` back
+under its own original id after the configured timeout, over a real Unix
+socket connection; the normal (non-timing-out) path was re-checked against
+a real running server afterward to confirm nothing regressed.
 
 ---
 
