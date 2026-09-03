@@ -219,6 +219,48 @@ final class WorkerPool
         }
     }
 
+    /** PLAN.md Phase 20: starts $count additional workers, immediately available for dispatch. */
+    public function scaleUp(int $count): void
+    {
+        for ($i = 0; $i < $count; $i++) {
+            $worker = $this->launcher->launch();
+            $this->workers[$worker->getPid()] = $worker;
+        }
+    }
+
+    /**
+     * PLAN.md Phase 20: retires up to $count currently-idle workers - never
+     * a busy one, this is routine downscaling under low load, not a reload,
+     * so there's no reason to wait on anything. Reuses reload()'s retiring
+     * mechanism for a subset rather than the whole pool: mark, then let
+     * retireIdleWorkers() (already idle, so this resolves immediately)
+     * actually shut them down.
+     *
+     * @return int how many were actually marked (may be fewer than $count
+     *         if there aren't that many idle workers to retire)
+     */
+    public function scaleDown(int $count): int
+    {
+        $marked = 0;
+
+        foreach ($this->workers as $pid => $worker) {
+            if ($marked >= $count) {
+                break;
+            }
+
+            if (isset($this->retiringPids[$pid]) || !$worker->isAvailable()) {
+                continue;
+            }
+
+            $this->retiringPids[$pid] = true;
+            $marked++;
+        }
+
+        $this->retireIdleWorkers();
+
+        return $marked;
+    }
+
     /**
      * PLAN.md Phase 16's safety timeout: sends every worker SHUTDOWN, waits
      * up to $timeoutSeconds for them to actually exit, then SIGKILLs

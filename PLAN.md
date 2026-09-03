@@ -1585,6 +1585,37 @@ Worker Utilization
 Request Latency
 ```
 
+## Status
+
+Autoscaler::check() (polled once per Master tick, same as the other per-tick
+sweeps) scales up by `step` when the queue has work and no worker is idle
+to take it, scales down by `step` when idle workers sit above `minWorkers`
+and the queue is empty - bounded by [minWorkers, maxWorkers] either way,
+with a cooldown between actions so one burst can't cause an immediate
+scale-up followed by a scale-down before the change had any chance to
+matter. Master now starts the pool at minWorkers (2) instead of a fixed 4,
+growing it under load rather than starting pre-scaled - minWorkers/
+maxWorkers use this phase's own example values (2/16).
+
+Uses only "Queue Size" and a derived "Worker Utilization" (busy vs. idle
+counts, from Phase 17) of the three signals the phase lists as merely
+*possible* - "Request Latency" would need per-request timing this codebase
+deliberately doesn't track anywhere (see Phase 17's own scope notes on
+request_duration).
+
+scaleUp()/scaleDown() live on WorkerPool itself, reusing Phase 19's
+retiring mechanism for scale-down (mark a subset idle-and-safe-to-retire,
+then let retireIdleWorkers() shut them down) rather than inventing a
+second one - a scaled-down worker is retired exactly the same way a
+reload()'s outgoing generation is, just for a handful of workers instead
+of all of them.
+
+Verified live: pool starts at 2; a burst of 60 concurrent requests grows it
+to 4 within a second (sampled repeatedly during the burst, not just before
+and after); after ~15s idle it settles back to exactly 2. All 60 requests
+completed successfully throughout (confirmed via the Phase 17 SIGUSR1
+snapshot: Total 60, Completed 60, Failed 0).
+
 ---
 
 # Recommended Implementation Order

@@ -15,11 +15,17 @@ use App\Protocol\Message;
 use App\Protocol\MessageType;
 use App\Queue\RequestQueue;
 use App\Server\UnixSocketServer;
+use App\Worker\Autoscaler;
 use App\Worker\WorkerPool;
 
 final class Master
 {
     private const string SOCKET_PATH = '/tmp/php-worker-pool.sock';
+
+    // PLAN.md Phase 20's own example bounds - the pool starts at the floor
+    // and grows under load rather than starting pre-scaled.
+    private const int MIN_WORKERS = 2;
+    private const int MAX_WORKERS = 16;
 
     // PLAN.md Phase 13's example limit - past this many requests waiting for
     // a free worker, the queue would just grow unbounded under sustained
@@ -44,12 +50,13 @@ final class Master
 
     public function run(): void
     {
-        $pool = new WorkerPool(4);
+        $pool = new WorkerPool(self::MIN_WORKERS);
         $loop = new EventLoop();
         $pendingRequests = new PendingRequestRegistry();
         $queue = new RequestQueue(self::MAX_QUEUE_SIZE);
         $requestMetrics = new RequestMetrics();
         $metrics = new MetricsCollector($pool, $queue, $pendingRequests, $requestMetrics);
+        $autoscaler = new Autoscaler($pool, $queue, self::MIN_WORKERS, self::MAX_WORKERS);
 
         // A worker's response carries the id the Master dispatched it
         // under, not the client's original id - resolve() maps back to
@@ -156,6 +163,7 @@ final class Master
 
                 $this->sendTimeouts($pendingRequests);
                 $pool->retireIdleWorkers();
+                $autoscaler->check();
             }
 
             $remaining = $this->shutdown($server, $loop, $pendingRequests, $requestMetrics);

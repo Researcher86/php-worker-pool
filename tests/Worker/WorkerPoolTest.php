@@ -254,4 +254,52 @@ final class WorkerPoolTest extends TestCase
 
         $pool->stop();
     }
+
+    /** PLAN.md Phase 20. */
+    public function testScaleUpAddsWorkers(): void
+    {
+        $launcher = new FakeWorkerLauncher();
+        $pool = new WorkerPool(2, $launcher);
+
+        $pool->scaleUp(3);
+
+        $this->assertSame(5, $pool->count());
+        $this->assertSame(5, $pool->countIdle());
+
+        $pool->stop();
+    }
+
+    public function testScaleDownRetiresOnlyIdleWorkersUpToTheRequestedCount(): void
+    {
+        $launcher = new FakeWorkerLauncher();
+        $pool = new WorkerPool(3, $launcher);
+
+        $busyId = $pool->getAvailable();
+        $this->assertNotNull($busyId);
+        $worker = $pool->write($busyId, new Message(MessageType::REQUEST, 'req-1'));
+
+        // 2 idle, 1 busy - asking for more than the idle count only retires
+        // what's actually safe to retire.
+        $retired = $pool->scaleDown(5);
+
+        $this->assertSame(2, $retired);
+        $this->assertSame(WorkerState::BUSY, $worker->getState()); // left alone
+        $this->assertSame('req-1', $worker->getCurrentRequestId());
+        $this->assertSame(1, $pool->countIdle() + $pool->countBusy()); // only the busy one is still selectable
+
+        $pool->stop();
+    }
+
+    public function testScaleDownReturnsZeroWhenNothingIsIdle(): void
+    {
+        $launcher = new FakeWorkerLauncher();
+        $pool = new WorkerPool(1, $launcher);
+
+        $busyId = $pool->getAvailable();
+        $pool->write($busyId, new Message(MessageType::REQUEST, 'req-1'));
+
+        $this->assertSame(0, $pool->scaleDown(1));
+
+        $pool->stop();
+    }
 }
