@@ -65,11 +65,19 @@ final class EventLoop
         $except = [];
 
         // A null timeout means block for as long as it takes; every caller
-        // here is fine waiting indefinitely for the next event.
-        stream_select($read, $write, $except, null);
+        // here is fine waiting indefinitely for the next event. The `@`
+        // suppresses the "Interrupted system call" warning stream_select()
+        // raises if a signal arrives mid-call (Master relies on exactly
+        // that to wake up and check its shutdown flag on SIGINT/SIGTERM).
+        // On that path $read is left unchanged — still every resource, not
+        // just the ready ones — since the call never completed; that's
+        // harmless here, each handler independently no-ops when there's
+        // nothing actually waiting for it.
+        @stream_select($read, $write, $except, null);
 
         // stream_select() rewrites $read in place to keep only the resources
-        // that are actually ready, so this only invokes handlers for those.
+        // that are actually ready, so this only invokes handlers for those
+        // (or, on an interrupted call, every resource — see above).
         foreach ($read as $resource) {
             $id = (int) $resource;
 

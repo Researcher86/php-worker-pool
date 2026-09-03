@@ -48,15 +48,16 @@ final class UnixSocketServer
         $this->loop->addReadable($this->server, $this->accept(...));
     }
 
-    /** @return resource */
-    public function getListener(): mixed
-    {
-        return $this->server;
-    }
-
     private function accept(): void
     {
-        $client = stream_socket_accept($this->server, 0);
+        // Unlike Socket, this doesn't re-check readiness itself before
+        // acting — it trusts the EventLoop already confirmed the listener
+        // is readable. That confirmation can be spurious (EventLoop::tick()
+        // interrupted by a signal reports every registered resource, not
+        // just ready ones); the `@` suppresses the resulting "Accept
+        // failed: Connection timed out" warning, and the false-check below
+        // already handles that case correctly either way.
+        $client = @stream_socket_accept($this->server, 0);
 
         if ($client === false) {
             return;

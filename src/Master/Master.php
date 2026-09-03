@@ -4,9 +4,7 @@ declare(strict_types=1);
 
 namespace App\Master;
 
-use App\Dispatcher\Dispatcher;
 use App\EventLoop\EventLoop;
-use App\Queue\RequestQueue;
 use App\Server\UnixSocketServer;
 use App\Worker\WorkerPool;
 
@@ -20,13 +18,13 @@ final class Master
     {
         $pool = new WorkerPool(4);
         $loop = new EventLoop();
-        $dispatcher = new Dispatcher(new RequestQueue(), $pool, $loop);
 
+        // Phase 10 wires client connections into a Dispatcher (queue +
+        // dispatch to $pool over $loop); for now we only need the socket
+        // accepted for a client to be able to connect.
         $server = new UnixSocketServer(
             self::SOCKET_PATH,
             $loop,
-            // Phase 10 will read/decode client requests here; for now we only
-            // need the socket accepted for a client to be able to connect.
             function (): void {
             },
         );
