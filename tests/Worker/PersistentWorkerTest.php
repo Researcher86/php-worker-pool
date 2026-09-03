@@ -14,10 +14,6 @@ final class PersistentWorkerTest extends TestCase
 {
     public function testWorkerProcessesMultipleConsecutiveRequests(): void
     {
-        if (!function_exists('pcntl_fork')) {
-            $this->markTestSkipped('pcntl extension required');
-        }
-
         $pair = new SocketPair();
 
         $pid = pcntl_fork();
@@ -60,10 +56,6 @@ final class PersistentWorkerTest extends TestCase
 
     public function testWorkerExitsCleanlyWhenMasterClosesConnectionWithoutShutdown(): void
     {
-        if (!function_exists('pcntl_fork')) {
-            $this->markTestSkipped('pcntl extension required');
-        }
-
         $pair = new SocketPair();
 
         $pid = pcntl_fork();

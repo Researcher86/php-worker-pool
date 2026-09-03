@@ -18,10 +18,6 @@ final class DispatcherTest extends TestCase
 {
     public function testProcessesMoreRequestsThanWorkersThroughTheQueue(): void
     {
-        if (!function_exists('pcntl_fork')) {
-            $this->markTestSkipped('pcntl extension required');
-        }
-
         $pool = new WorkerPool(2);
         $dispatcher = new Dispatcher(new RequestQueue(), $pool);
 
@@ -46,10 +42,6 @@ final class DispatcherTest extends TestCase
 
     public function testAllWorkersAreAvailableAfterBatchCompletes(): void
     {
-        if (!function_exists('pcntl_fork')) {
-            $this->markTestSkipped('pcntl extension required');
-        }
-
         $pool = new WorkerPool(2);
         $dispatcher = new Dispatcher(new RequestQueue(), $pool);
 
@@ -65,10 +57,6 @@ final class DispatcherTest extends TestCase
 
     public function testWorkerDyingMidRequestThrowsInsteadOfHanging(): void
     {
-        if (!function_exists('pcntl_fork') || !function_exists('posix_kill')) {
-            $this->markTestSkipped('pcntl and posix extensions required');
-        }
-
         $pool = new WorkerPool(1);
 
         // WorkerPool keys workers by pid, so getAvailable() doubles as "give me

@@ -159,8 +159,21 @@ final class WorkerPool
             $this->totalCrashed++;
 
             if ($this->accepting) {
-                $replacement = $this->launcher->launch();
-                $this->workers[$replacement->getPid()] = $replacement;
+                try {
+                    $replacement = $this->launcher->launch();
+                    $this->workers[$replacement->getPid()] = $replacement;
+                } catch (\Throwable) {
+                    // Same reasoning as advanceReload(): don't let a failed
+                    // launch() propagate out of a SIGCHLD handler. Unlike
+                    // there, there's no pid to requeue for a specific retry -
+                    // this one replacement is simply skipped, leaving the
+                    // pool one short of its configured size until something
+                    // else grows it (e.g. Autoscaler, under actual load).
+                    // What matters here is that this loop keeps going: a
+                    // single waitpid() batch can contain more than one dead
+                    // worker, and the rest still need to be reaped and
+                    // reported below regardless of this one's outcome.
+                }
             }
         }
 
@@ -216,9 +229,23 @@ final class WorkerPool
         while ($this->pendingReload !== [] && (count($this->workers) < $this->maxWorkers || $this->retiringPids === [])) {
             $pid = array_shift($this->pendingReload);
 
-            $worker = $this->launcher->launch();
-            $this->workers[$worker->getPid()] = $worker;
+            try {
+                $worker = $this->launcher->launch();
+            } catch (\Throwable) {
+                // Couldn't launch a replacement right now (e.g. a transient
+                // fork failure under resource pressure) - put the pid back
+                // rather than losing track of it, so a later call (the next
+                // reapDeadWorkers(), once something frees up) gets another
+                // chance instead of this worker silently never retiring.
+                // Not rethrown: this runs from reapDeadWorkers(), which a
+                // SIGCHLD handler calls - an uncaught exception there would
+                // propagate out of signal delivery, not just out of here.
+                array_unshift($this->pendingReload, $pid);
 
+                break;
+            }
+
+            $this->workers[$worker->getPid()] = $worker;
             $this->retiringPids[$pid] = true;
         }
 
@@ -263,13 +290,34 @@ final class WorkerPool
         }
     }
 
-    /** PLAN.md Phase 20: starts $count additional workers, immediately available for dispatch. */
-    public function scaleUp(int $count): void
+    /**
+     * PLAN.md Phase 20: starts up to $count additional workers, immediately
+     * available for dispatch. Called from Autoscaler::check(), in Master's
+     * main loop rather than a signal handler - but a launch() failure
+     * partway through (the same transient fork-under-resource-pressure
+     * case WorkerPool's own constructor and advanceReload() guard against)
+     * would otherwise propagate straight out of that loop and take the
+     * whole Master down over what's normally recoverable. Stops early
+     * instead, without rethrowing.
+     *
+     * @return int how many were actually launched (may be fewer than $count)
+     */
+    public function scaleUp(int $count): int
     {
+        $launched = 0;
+
         for ($i = 0; $i < $count; $i++) {
-            $worker = $this->launcher->launch();
+            try {
+                $worker = $this->launcher->launch();
+            } catch (\Throwable) {
+                break;
+            }
+
             $this->workers[$worker->getPid()] = $worker;
+            $launched++;
         }
+
+        return $launched;
     }
 
     /**

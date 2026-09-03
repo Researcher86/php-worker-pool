@@ -99,6 +99,15 @@ final class Master
                 $pendingRequests->resolve($dispatchId); // never actually dispatched - nothing to route a response to later
                 $client->write(new Message(MessageType::ERROR, $request->id, ['error' => 'server_overloaded']));
             }
+        }, function (ClientConnection $client) use ($pendingRequests, $requestMetrics): void {
+            // The client is gone - any request of theirs still in flight
+            // will never have anywhere to deliver its response. Without
+            // this, those entries would just sit until their timeout
+            // deadline for no reason; the worker handling one is still
+            // doing real work that's now wasted either way.
+            foreach ($pendingRequests->removeByClient($client) as $orphaned) {
+                $requestMetrics->recordFailed();
+            }
         });
 
         $server = new UnixSocketServer(self::SOCKET_PATH, $loop, $clients->accept(...));

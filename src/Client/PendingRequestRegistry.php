@@ -103,6 +103,31 @@ final class PendingRequestRegistry
         return $all;
     }
 
+    /**
+     * Removes and returns every entry waiting on $client, regardless of
+     * deadline - a client can disconnect (or send a malformed message,
+     * ClientRegistry treats both the same) while one of its requests is
+     * still in flight. Without this, that entry would just sit until its
+     * timeout deadline: the response it's waiting for, once a worker
+     * produces it, would resolve() into a client whose socket is already
+     * closed - wasted work for nothing anyone can ever receive.
+     *
+     * @return list<PendingRequest>
+     */
+    public function removeByClient(ClientConnection $client): array
+    {
+        $orphaned = [];
+
+        foreach ($this->pending as $id => $entry) {
+            if ($entry->client === $client) {
+                $orphaned[] = $entry;
+                unset($this->pending[$id]);
+            }
+        }
+
+        return $orphaned;
+    }
+
     public function count(): int
     {
         return count($this->pending);

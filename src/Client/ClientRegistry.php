@@ -29,15 +29,27 @@ final class ClientRegistry
     /** @var \Closure(ClientConnection, Message): void */
     private \Closure $onRequest;
 
+    /** @var \Closure(ClientConnection): void */
+    private \Closure $onDisconnect;
+
     /**
      * @param callable(ClientConnection, Message): void $onRequest invoked
      *        for every message successfully decoded from a client
+     * @param callable(ClientConnection): void|null $onDisconnect invoked
+     *        once a client is dropped (disconnected or sent something
+     *        unparseable) - the caller's chance to clean up anything it
+     *        was tracking against this client (e.g. a request still
+     *        awaiting this client's response). Defaults to a no-op for
+     *        callers that don't track anything per-client.
      */
     public function __construct(
         private readonly EventLoop $loop,
         callable $onRequest,
+        ?callable $onDisconnect = null,
     ) {
         $this->onRequest = \Closure::fromCallable($onRequest);
+        $this->onDisconnect = \Closure::fromCallable($onDisconnect ?? static function (ClientConnection $client): void {
+        });
     }
 
     public function count(): int
@@ -74,5 +86,7 @@ final class ClientRegistry
         $client->close();
 
         unset($this->clients[$client->getId()]);
+
+        ($this->onDisconnect)($client);
     }
 }

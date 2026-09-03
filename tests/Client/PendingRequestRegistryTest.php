@@ -129,4 +129,45 @@ final class PendingRequestRegistryTest extends TestCase
 
         $this->assertSame(0, $registry->count());
     }
+
+    /**
+     * Regression coverage: without this, a client's in-flight request just
+     * sat until its timeout deadline after the client disconnected, even
+     * though there was no longer anyone to ever deliver the response to.
+     */
+    public function testRemoveByClientRemovesOnlyThatClientsEntriesRegardlessOfDeadline(): void
+    {
+        $registry = new PendingRequestRegistry();
+        $gone = $this->client();
+        $stillHere = $this->client();
+
+        $registry->register($gone, 'from-gone-1', 30.0);
+        $goneId2 = $registry->register($gone, 'from-gone-2', -1.0); // already past deadline - shouldn't matter
+        $stillHereId = $registry->register($stillHere, 'from-still-here', 30.0);
+
+        $orphaned = $registry->removeByClient($gone);
+
+        $this->assertCount(2, $orphaned);
+        $originalIds = array_map(static fn ($p) => $p->originalId, $orphaned);
+        sort($originalIds);
+        $this->assertSame(['from-gone-1', 'from-gone-2'], $originalIds);
+
+        // The other client's entry, and only that one, is still tracked.
+        $this->assertSame(1, $registry->count());
+        $this->assertNotNull($registry->resolve($stillHereId));
+
+        // Already removed by removeByClient() - not resolvable, and not
+        // returned again by removeExpired() despite its deadline.
+        $this->assertNull($registry->resolve($goneId2));
+        $this->assertCount(0, $registry->removeExpired(PHP_FLOAT_MAX));
+    }
+
+    public function testRemoveByClientReturnsEmptyWhenThatClientHasNoPendingEntries(): void
+    {
+        $registry = new PendingRequestRegistry();
+        $registry->register($this->client(), 'someone-elses', 30.0);
+
+        $this->assertSame([], $registry->removeByClient($this->client()));
+        $this->assertSame(1, $registry->count());
+    }
 }

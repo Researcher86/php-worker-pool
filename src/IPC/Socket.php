@@ -16,6 +16,13 @@ final readonly class Socket
         private mixed $socket,
         private MessageEncoder $encoder = new MessageEncoder(),
         private MessageDecoder $decoder = new MessageDecoder(),
+        // Client sockets are non-blocking (UnixSocketServer::accept()) - a
+        // full kernel send buffer makes fwrite() return fewer bytes than
+        // asked instead of blocking for room, so write() below has to keep
+        // retrying. Bounds how long a single slow/stuck peer can stall the
+        // rest of write()'s caller (the single-threaded Master) rather than
+        // waiting on it forever.
+        private float $writeTimeoutSeconds = 5.0,
     ) {
     }
 
@@ -99,11 +106,45 @@ final readonly class Socket
 
     public function write(Message $message): void
     {
-        // Writing to a peer that's already gone raises a "Broken pipe"
-        // warning; the `@` suppresses it. That case is already handled on
-        // the read side — the next read on this socket throws
-        // ConnectionClosedException — so there's nothing more to do here.
-        @fwrite($this->socket, $this->encoder->encode($message));
+        $data = $this->encoder->encode($message);
+        $length = strlen($data);
+        $offset = 0;
+        $deadline = microtime(true) + $this->writeTimeoutSeconds;
+
+        while ($offset < $length) {
+            // Writing to a peer that's already gone raises a "Broken pipe"
+            // warning; the `@` suppresses it. fwrite() returning false means
+            // that - already handled on the read side, where the next
+            // read() on this socket throws ConnectionClosedException - so
+            // there's nothing more to do here than stop.
+            $written = @fwrite($this->socket, substr($data, $offset));
+
+            if ($written === false) {
+                return;
+            }
+
+            $offset += $written;
+
+            if ($offset >= $length) {
+                break;
+            }
+
+            // A non-blocking socket's fwrite() can write fewer bytes than
+            // asked (0 included) once its kernel send buffer is full,
+            // instead of blocking until there's room for the rest - an
+            // unretried fwrite() here would silently drop the remainder of
+            // the frame on a slow peer instead of a dead one. Wait for the
+            // socket to become writable again rather than busy-spinning
+            // fwrite() in the meantime.
+            if (microtime(true) >= $deadline) {
+                return; // peer isn't draining its buffer fast enough - give up, same as a dead one
+            }
+
+            $write = [$this->socket];
+            $read = [];
+            $except = [];
+            @stream_select($read, $write, $except, 1);
+        }
     }
 
     public function close(): void

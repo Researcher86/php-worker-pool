@@ -69,10 +69,6 @@ final class WorkerPoolClientTest extends TestCase
 
     public function testCallSendsRequestAndReturnsDecodedResponsePayload(): void
     {
-        if (!function_exists('pcntl_fork')) {
-            $this->markTestSkipped('pcntl extension required');
-        }
-
         $pid = $this->forkServer(function (Socket $socket, Message $request): void {
             $socket->write(new Message(MessageType::RESPONSE, $request->id, ['result' => 30]));
         });
@@ -87,10 +83,6 @@ final class WorkerPoolClientTest extends TestCase
 
     public function testCallSendsActionAndParamsInThePayload(): void
     {
-        if (!function_exists('pcntl_fork')) {
-            $this->markTestSkipped('pcntl extension required');
-        }
-
         $pid = $this->forkServer(function (Socket $socket, Message $request): void {
             // Echo the request payload back so the parent can assert on it.
             $socket->write(new Message(MessageType::RESPONSE, $request->id, $request->payload));
@@ -118,10 +110,6 @@ final class WorkerPoolClientTest extends TestCase
 
     public function testNoResponseThrowsRequestTimedOutException(): void
     {
-        if (!function_exists('pcntl_fork')) {
-            $this->markTestSkipped('pcntl extension required');
-        }
-
         // Accepts the connection and reads the request, but never responds -
         // sleeps past the client's timeout so the connection stays open the
         // whole time (forkServer() exits right after this closure returns,

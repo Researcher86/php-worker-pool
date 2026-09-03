@@ -17,10 +17,6 @@ final class WorkerPoolTest extends TestCase
 {
     public function testStartsRequestedNumberOfWorkers(): void
     {
-        if (!function_exists('pcntl_fork')) {
-            $this->markTestSkipped('pcntl extension required');
-        }
-
         $pool = new WorkerPool(4);
 
         $this->assertSame(4, $pool->count());
@@ -66,10 +62,6 @@ final class WorkerPoolTest extends TestCase
 
     public function testMultipleWorkersProcessRequestsInParallel(): void
     {
-        if (!function_exists('pcntl_fork')) {
-            $this->markTestSkipped('pcntl extension required');
-        }
-
         $pool = new WorkerPool(4);
         $dispatcher = new Dispatcher(new RequestQueue(), $pool);
 
@@ -92,10 +84,6 @@ final class WorkerPoolTest extends TestCase
 
     public function testGetAvailableReturnsIdleWorkerThenChangesWhenBusy(): void
     {
-        if (!function_exists('pcntl_fork')) {
-            $this->markTestSkipped('pcntl extension required');
-        }
-
         $pool = new WorkerPool(1);
         $workerId = $pool->getAvailable();
 
@@ -120,10 +108,6 @@ final class WorkerPoolTest extends TestCase
      */
     public function testReapDeadWorkersRemovesAndReplacesACrashedWorker(): void
     {
-        if (!function_exists('pcntl_fork') || !function_exists('posix_kill')) {
-            $this->markTestSkipped('pcntl and posix extensions required');
-        }
-
         $pool = new WorkerPool(2);
         $deadWorkerId = $pool->getAvailable();
         $this->assertNotNull($deadWorkerId);
@@ -154,10 +138,6 @@ final class WorkerPoolTest extends TestCase
      */
     public function testStopKillsAWorkerThatNeverRespondsToShutdown(): void
     {
-        if (!function_exists('pcntl_fork') || !function_exists('posix_kill')) {
-            $this->markTestSkipped('pcntl and posix extensions required');
-        }
-
         $pool = new WorkerPool(1, new StuckWorkerLauncher());
         $stuckPid = $pool->getAvailable();
         $this->assertNotNull($stuckPid);
@@ -196,10 +176,6 @@ final class WorkerPoolTest extends TestCase
 
     public function testTotalCrashedAccumulatesAcrossReapCalls(): void
     {
-        if (!function_exists('pcntl_fork') || !function_exists('posix_kill')) {
-            $this->markTestSkipped('pcntl and posix extensions required');
-        }
-
         $pool = new WorkerPool(2);
         $this->assertSame(0, $pool->totalCrashed());
 
@@ -355,6 +331,117 @@ final class WorkerPoolTest extends TestCase
         $pool->write($busyId, new Message(MessageType::REQUEST, 'req-1'));
 
         $this->assertSame(0, $pool->scaleDown(1));
+
+        $pool->stop();
+    }
+
+    /**
+     * Regression test: advanceReload() (used by reload()) shifted a pid off
+     * $pendingReload before calling launch() for its replacement - a
+     * failure there (e.g. a transient fork() failure) used to lose that pid
+     * entirely: no replacement launched, but nothing left pending either,
+     * so it would just sit forever, neither retiring nor ever replaced.
+     */
+    public function testReloadSurvivesALaunchFailureAndKeepsTheWorkerPendingForRetry(): void
+    {
+        $launcher = new FailingWorkerLauncher(failOnCall: 3); // construction uses calls 1-2
+        $pool = new WorkerPool(2, $launcher);
+
+        $pool->reload(); // call 3 fails immediately
+
+        // Didn't crash, and didn't launch a replacement it can't account for.
+        $this->assertSame(2, $pool->count());
+
+        // A later trigger (the next SIGCHLD, in production) gets another
+        // chance rather than reload() being permanently stuck - still fails
+        // here too (this fake launcher never recovers), but must not throw.
+        $pool->reapDeadWorkers();
+
+        $this->assertSame(2, $pool->count());
+
+        $pool->stop();
+    }
+
+    /** The other half: once launch() actually recovers, the retry completes the reload normally. */
+    public function testReloadCompletesOnceARetriedLaunchSucceeds(): void
+    {
+        $launcher = new FlakyOnceWorkerLauncher(failOnCall: 3); // construction uses calls 1-2
+        $pool = new WorkerPool(2, $launcher);
+
+        $pool->reload(); // call 3 fails, first pid requeued, second never attempted this round
+
+        $this->assertSame(2, $pool->count());
+
+        $pool->reapDeadWorkers(); // retries: calls 4 and 5 both succeed now
+
+        // Both original workers replaced (they're still present, marked
+        // STOPPING, until something actually reaps them - see the
+        // FakeWorkerLauncher caveat elsewhere in this file).
+        $this->assertSame(4, $pool->count());
+
+        $pool->stop();
+    }
+
+    /**
+     * Regression test: reapDeadWorkers()'s crash-replacement launch() had
+     * no try/catch, so a failure there aborted its whole while loop - any
+     * other dead worker from the same waitpid() batch was left unreaped and
+     * unreported until the next SIGCHLD, instead of just that one
+     * replacement being skipped.
+     */
+    public function testReapDeadWorkersProcessesTheWholeBatchEvenWhenOneReplacementLaunchFails(): void
+    {
+        // Pool of 3 real workers (launch calls 1-3). Two are killed at
+        // once; their replacements are calls 4 and 5 - call 4 is made to
+        // fail, call 5 succeeds.
+        $launcher = new FlakyForkedWorkerLauncher(failOnCall: 4);
+        $pool = new WorkerPool(3, $launcher);
+
+        // write() marks a worker BUSY (excluded from getAvailable()), so
+        // three calls in a row give three distinct pids.
+        $id1 = $pool->getAvailable();
+        $this->assertNotNull($id1);
+        $pool->write($id1, new Message(MessageType::REQUEST, 'noop-1'));
+
+        $id2 = $pool->getAvailable();
+        $this->assertNotNull($id2);
+        $pool->write($id2, new Message(MessageType::REQUEST, 'noop-2'));
+
+        $id3 = $pool->getAvailable();
+        $this->assertNotNull($id3);
+
+        posix_kill($id1, SIGKILL);
+        posix_kill($id2, SIGKILL);
+        usleep(150_000);
+
+        $crashes = $pool->reapDeadWorkers();
+
+        // Both dead workers were reaped and reported - the loop wasn't
+        // aborted by the first (failed) replacement attempt.
+        $this->assertCount(2, $crashes);
+
+        // 1 survivor (id3) + exactly 1 successful replacement - the other
+        // failed and was skipped, not silently retried forever here.
+        $this->assertSame(2, $pool->count());
+
+        $pool->stop();
+    }
+
+    /**
+     * Regression test: scaleUp()'s launch() had no try/catch either -
+     * called from Autoscaler::check() in Master's main loop (not a signal
+     * handler), so an uncaught failure there would have taken the whole
+     * Master down instead of just under-fulfilling the scale-up request.
+     */
+    public function testScaleUpStopsEarlyWithoutThrowingWhenALaunchFails(): void
+    {
+        $launcher = new FailingWorkerLauncher(failOnCall: 4); // construction uses calls 1-2
+        $pool = new WorkerPool(2, $launcher);
+
+        $launched = $pool->scaleUp(5); // call 3 succeeds, call 4 fails - stops there
+
+        $this->assertSame(1, $launched);
+        $this->assertSame(3, $pool->count());
 
         $pool->stop();
     }

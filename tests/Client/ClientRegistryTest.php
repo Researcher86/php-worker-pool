@@ -86,6 +86,61 @@ final class ClientRegistryTest extends TestCase
         $this->assertFalse($loop->hasReadable());
     }
 
+    /**
+     * PLAN.md Phase 11's PendingRequestRegistry needs to know when a client
+     * it's tracking requests for is gone, so it can drop those entries
+     * instead of waiting out their timeout for nothing - onDisconnect is
+     * the hook Master wires that through. Covers both ways a client gets
+     * dropped (clean disconnect and a malformed frame).
+     */
+    public function testOnDisconnectFiresWithTheClientOnCleanDisconnect(): void
+    {
+        $loop = new EventLoop();
+        $disconnected = null;
+
+        $registry = new ClientRegistry(
+            $loop,
+            static function (): void {
+            },
+            function (ClientConnection $client) use (&$disconnected): void {
+                $disconnected = $client;
+            }
+        );
+
+        [$serverEnd, $clientEnd] = $this->pair();
+        $registry->accept($serverEnd);
+
+        fclose($clientEnd);
+        $loop->tick();
+
+        $this->assertInstanceOf(ClientConnection::class, $disconnected);
+    }
+
+    public function testOnDisconnectFiresOnAMalformedFrameToo(): void
+    {
+        $loop = new EventLoop();
+        $disconnected = null;
+
+        $registry = new ClientRegistry(
+            $loop,
+            static function (): void {
+            },
+            function (ClientConnection $client) use (&$disconnected): void {
+                $disconnected = $client;
+            }
+        );
+
+        [$serverEnd, $clientEnd] = $this->pair();
+        $registry->accept($serverEnd);
+
+        fwrite($clientEnd, pack('N', 5) . 'not{}');
+        $loop->tick();
+
+        $this->assertInstanceOf(ClientConnection::class, $disconnected);
+
+        fclose($clientEnd);
+    }
+
     public function testMalformedRequestDisconnectsClientWithoutCrashing(): void
     {
         $loop = new EventLoop();
