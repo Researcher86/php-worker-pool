@@ -43,8 +43,6 @@ final readonly class WorkerRunner
 
     private function handle(Message $request): Message
     {
-        echo $request->id . "\n";
-
         return match ($request->payload['action'] ?? null) {
             'calculate' => new Message(MessageType::RESPONSE, $request->id, [
                 'result' => $request->payload['params']['a'] + $request->payload['params']['b'],
