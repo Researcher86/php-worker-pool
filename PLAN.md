@@ -528,6 +528,25 @@ failure it calls `$this->stop(0.0)` on whatever was already launched (kills
 and reaps them) before rethrowing. Covered by `WorkerPoolTest::
 testConstructorStopsAlreadyLaunchedWorkersIfALaterLaunchFails`.
 
+**Post-review fix (second pass):** the same unguarded-`launch()` problem
+existed at three more call sites the first pass's fix didn't reach -
+`advanceReload()` (Phase 19), `reapDeadWorkers()`'s crash-replacement
+(Phase 15), and `scaleUp()` (Phase 20). Worse than the constructor case in
+two of the three: `reapDeadWorkers()` runs from a SIGCHLD handler, and an
+uncaught exception there aborted reaping/replacing the rest of that
+batch's dead workers, not just the one that failed; `scaleUp()` runs from
+`Autoscaler::check()` in Master's main loop, where an uncaught exception
+would have taken the whole Master down. All three now catch and recover
+instead of propagating: `advanceReload()` requeues the pid for the next
+opportunity to retry (`reapDeadWorkers()` re-triggers it once headroom
+frees up), `reapDeadWorkers()` keeps processing the rest of its batch, and
+`scaleUp()` (now returns `int`, not `void`) stops early and reports how
+many it actually launched. Covered by `WorkerPoolTest::
+testReloadSurvivesALaunchFailureAndKeepsTheWorkerPendingForRetry`,
+`testReloadCompletesOnceARetriedLaunchSucceeds`,
+`testReapDeadWorkersProcessesTheWholeBatchEvenWhenOneReplacementLaunchFails`,
+and `testScaleUpStopsEarlyWithoutThrowingWhenALaunchFails`.
+
 ---
 
 # Phase 6 — Request Queue
@@ -814,10 +833,20 @@ Connection State
 * [x] Store socket
 * [x] Store read buffer — provided by Socket's own MessageDecoder buffering
       (see IPC/Socket.php), no separate buffer needed on ClientConnection
-* [ ] Store write buffer — not implemented; Socket::write() still does a
-      single blind fwrite() with no queuing/retry for a full kernel send
-      buffer. Not exercised yet (nothing writes responses to clients until
-      Phase 11), revisit if/when that becomes a real problem
+* [x] Store write buffer — Socket::write() used to do a single blind
+      fwrite() with no queuing/retry, exactly the gap this line originally
+      flagged. Once Phase 11 started actually writing responses to clients
+      it became a real problem: client sockets are non-blocking, and a
+      full kernel send buffer makes fwrite() return fewer bytes than asked
+      instead of blocking - the rest of the frame was silently dropped
+      instead of retried (found by a later code review, not caught by any
+      test until one was written for it - see SocketTest). write() now
+      loops until the whole frame is out, waiting on the socket's
+      writability via stream_select() between attempts, bounded by a
+      writeTimeoutSeconds so one stuck/slow client can't stall the
+      single-threaded Master's other clients forever. A genuinely dead
+      peer is handled exactly as before (fwrite() returning false - give
+      up silently, the next read() reports it).
 * [x] Handle disconnect
 * [x] Remove dead clients — also covers a client sending unparseable bytes
       (MalformedMessageException), not just a clean disconnect
@@ -829,6 +858,16 @@ A disconnected client must not crash the Master.
 Verified live: a client that disconnects abruptly mid-request, and a client
 that sends malformed framing, both get dropped without affecting the Master
 or other clients/workers (see ClientRegistryTest and a manual end-to-end run).
+
+**Post-review fix:** "Remove dead clients" removed the client from
+ClientRegistry's own tracking, but nothing told PendingRequestRegistry
+(Phase 11) that client was gone - a request still in flight for it just sat
+until its 30s timeout for no reason, since there was no longer anyone to
+deliver the response to. ClientRegistry now takes an optional
+`onDisconnect` callback, invoked from the same `remove()` that already
+handles both the clean-disconnect and malformed-frame cases; Master wires
+it to `PendingRequestRegistry::removeByClient()` (new). See Phase 11's own
+note.
 
 ## Definition of Done
 
@@ -923,6 +962,13 @@ under the identical correlation id "same-id" with different payloads - each
 received back exactly its own response, never the other's (see
 PendingRequestRegistryTest for the unit-level collision case, and a manual
 end-to-end run for the live one).
+
+**Post-review fix:** "Remove completed request" only ever covered the
+happy path (a response actually arrives) - a client disconnecting with a
+request still in flight left that entry tracked with nothing left to route
+a response to, until Phase 14's 30s timeout eventually swept it. New
+`PendingRequestRegistry::removeByClient()`, called from Phase 10's new
+`ClientRegistry` `onDisconnect` hook, removes it immediately instead.
 
 ---
 
