@@ -9,6 +9,7 @@ use App\IPC\ConnectionClosedException;
 use App\Protocol\Message;
 use App\Protocol\MessageType;
 use App\Queue\RequestQueue;
+use App\Worker\ForkedWorkerLauncher;
 use App\Worker\WorkerPool;
 use App\Worker\WorkerState;
 use PHPUnit\Framework\TestCase;
@@ -33,7 +34,8 @@ final class WorkerPoolTest extends TestCase
      */
     public function testConstructorStopsAlreadyLaunchedWorkersIfALaterLaunchFails(): void
     {
-        $launcher = new FailingWorkerLauncher(failOnCall: 3);
+        $fake = new FakeWorkerLauncher();
+        $launcher = new FlakyWorkerLauncher($fake, failOnCall: 3, permanent: true);
 
         try {
             new WorkerPool(5, $launcher);
@@ -45,7 +47,7 @@ final class WorkerPoolTest extends TestCase
         // Two workers launched successfully before the third call failed -
         // both must have been told to shut down (their master-side socket
         // closed) rather than left dangling as orphans.
-        $workerEnds = $launcher->workerEnds();
+        $workerEnds = $fake->workerEnds();
         $this->assertCount(2, $workerEnds);
 
         foreach ($workerEnds as $workerEnd) {
@@ -344,7 +346,7 @@ final class WorkerPoolTest extends TestCase
      */
     public function testReloadSurvivesALaunchFailureAndKeepsTheWorkerPendingForRetry(): void
     {
-        $launcher = new FailingWorkerLauncher(failOnCall: 3); // construction uses calls 1-2
+        $launcher = new FlakyWorkerLauncher(new FakeWorkerLauncher(), failOnCall: 3, permanent: true); // construction uses calls 1-2
         $pool = new WorkerPool(2, $launcher);
 
         $pool->reload(); // call 3 fails immediately
@@ -365,7 +367,7 @@ final class WorkerPoolTest extends TestCase
     /** The other half: once launch() actually recovers, the retry completes the reload normally. */
     public function testReloadCompletesOnceARetriedLaunchSucceeds(): void
     {
-        $launcher = new FlakyOnceWorkerLauncher(failOnCall: 3); // construction uses calls 1-2
+        $launcher = new FlakyWorkerLauncher(new FakeWorkerLauncher(), failOnCall: 3); // construction uses calls 1-2
         $pool = new WorkerPool(2, $launcher);
 
         $pool->reload(); // call 3 fails, first pid requeued, second never attempted this round
@@ -394,7 +396,7 @@ final class WorkerPoolTest extends TestCase
         // Pool of 3 real workers (launch calls 1-3). Two are killed at
         // once; their replacements are calls 4 and 5 - call 4 is made to
         // fail, call 5 succeeds.
-        $launcher = new FlakyForkedWorkerLauncher(failOnCall: 4);
+        $launcher = new FlakyWorkerLauncher(new ForkedWorkerLauncher(), failOnCall: 4);
         $pool = new WorkerPool(3, $launcher);
 
         // write() marks a worker BUSY (excluded from getAvailable()), so
@@ -435,7 +437,7 @@ final class WorkerPoolTest extends TestCase
      */
     public function testScaleUpStopsEarlyWithoutThrowingWhenALaunchFails(): void
     {
-        $launcher = new FailingWorkerLauncher(failOnCall: 4); // construction uses calls 1-2
+        $launcher = new FlakyWorkerLauncher(new FakeWorkerLauncher(), failOnCall: 4, permanent: true); // construction uses calls 1-2
         $pool = new WorkerPool(2, $launcher);
 
         $launched = $pool->scaleUp(5); // call 3 succeeds, call 4 fails - stops there
