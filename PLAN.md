@@ -1477,13 +1477,12 @@ dumping the snapshot to stdout - the usual Unix convention for "report your
 stats now" (nginx and php-fpm both do the same), and it needed no new wire
 protocol or endpoint.
 
-Not implemented: the "Performance Metrics" (request_duration,
-worker_processing_time) and queue_wait_time. All three need timestamps
-nothing in this codebase tracks yet (when a request was queued, when a
-worker actually picked it up), and this phase - unlike every other one -
-has no Tasks/Definition of Done section forcing the question, so this was
-a judgment call: add the counters that were cheap and directly derivable
-from state that already exists, not invent the extra bookkeeping speculatively.
+Originally not implemented: the "Performance Metrics" (request_duration,
+worker_processing_time) and queue_wait_time, all three needing timestamps
+nothing tracked yet. Added later, once a review made the operational case
+concrete - a p99 of 10s means something entirely different depending on
+whether it was spent queued or executing, and one number cannot say which.
+See "Latency Breakdown" below.
 
 Verified live: 3 real requests through a running server, then SIGUSR1 -
 the dumped snapshot read Workers Total 4/Idle 4/Busy 0 and Requests Total
@@ -2196,6 +2195,52 @@ everything else) and asks for a backlog of 511. Measured before and after:
 
 After both fixes the chaos and invariant suites ran fifty consecutive times
 with zero failures.
+
+---
+
+# Post-Phase-20: Latency Breakdown
+
+The last item left open by Phase 17, closed once a review made the case: a
+single request_duration cannot distinguish a saturated pool from a slow
+handler, and those have opposite fixes.
+
+`PendingRequest` now carries two timestamps - when the Master accepted the
+request, and when a worker actually picked it up. The second is stamped by
+the Dispatcher through a new `onDispatched` callback, since it is the only
+component that knows the moment a request stops waiting for capacity and
+starts being worked on. `Master::recordLatency()` turns the pair into three
+figures when the request completes:
+
+```text
+   accepted ──────── dispatched ──────── answered
+       │   queue wait     │   execution      │
+       └─────────────── end to end ──────────┘
+```
+
+Only requests that actually reached a worker are measured: one rejected or
+timed out while still queued has no execution time, and averaging a zero
+into it would flatter the numbers.
+
+`DurationStat` keeps count, mean and max rather than percentiles -
+deliberately, since percentiles need the samples retained and a long-running
+Master would then hold an ever-growing array of floats for a number nobody
+reads until something is wrong. Three scalars answer the operational
+question and cost nothing to carry; swapping in a histogram later changes
+that class and no caller.
+
+Demonstrated with the same 20ms handler and the same eight clients, varying
+only the pool size:
+
+```text
+   8 workers                      1 worker
+     Queue wait: avg   0.03ms       Queue wait: avg 139.72ms
+     Execution:  avg  21.50ms       Execution:  avg  20.94ms
+     Total:      avg  21.53ms       Total:      avg 160.66ms
+```
+
+The handler is identical in both. The breakdown says so; a single total
+would have read as "it got eight times slower" and pointed at the wrong
+thing entirely.
 
 ---
 

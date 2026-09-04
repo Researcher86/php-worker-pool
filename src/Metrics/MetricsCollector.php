@@ -39,6 +39,9 @@ final readonly class MetricsCollector
             requestsFailed: $this->requests->failed(),
             requestsTimeout: $this->pendingRequests->timeoutCount(),
             requestsRejected: $this->queue->rejectedCount(),
+            queueWait: $this->requests->queueWait->summary(),
+            execution: $this->requests->execution->summary(),
+            endToEnd: $this->requests->endToEnd->summary(),
         );
     }
 }

@@ -6,6 +6,7 @@ namespace App\Master;
 
 use App\Client\ClientConnection;
 use App\Client\ClientRegistry;
+use App\Client\PendingRequest;
 use App\Client\PendingRequestRegistry;
 use App\Dispatcher\Dispatcher;
 use App\EventLoop\EventLoop;
@@ -123,7 +124,16 @@ final class Master
         $this->metrics = new MetricsCollector($this->pool, $queue, $this->pendingRequests, $this->requestMetrics);
         $autoscaler = new Autoscaler($this->pool, $queue, $this->minWorkers, $this->maxWorkers, clock: $this->clock);
 
-        $this->dispatcher = new Dispatcher($queue, $this->pool, $this->loop, $this->routeResponse(...));
+        $this->dispatcher = new Dispatcher(
+            $queue,
+            $this->pool,
+            $this->loop,
+            $this->routeResponse(...),
+            // Stamps the queue/execution boundary - the Dispatcher is the
+            // only place that knows when a request stopped waiting for
+            // capacity and started being worked on.
+            fn (string $id) => $this->pendingRequests->markDispatched($id, $this->clock->now()),
+        );
         $this->clients = new ClientRegistry($this->loop, $this->handleClientRequest(...), $this->handleClientDisconnect(...));
         $server = new UnixSocketServer($this->socketPath, $this->loop, $this->clients->accept(...));
 
@@ -335,7 +345,35 @@ final class Master
             ? $this->requestMetrics->recordCompleted()
             : $this->requestMetrics->recordFailed();
 
+        $this->recordLatency($pending);
+
         $pending->client->write(new Message($response->type, $pending->originalId, $response->payload));
+    }
+
+    /**
+     * Splits a finished request's life into the two halves that have
+     * different causes and different fixes: time spent waiting for a free
+     * worker (the pool is too small, or overloaded) and time the handler
+     * itself took (the code is slow). A single end-to-end number hides
+     * which one it was, which is exactly when you need to know.
+     *
+     * Only requests that actually reached a worker are measured - one
+     * rejected or timed out while still queued has no execution time to
+     * report, and averaging a zero into it would flatter the numbers.
+     */
+    private function recordLatency(PendingRequest $pending): void
+    {
+        $now = $this->clock->now();
+        $queued = $pending->queuedSeconds();
+        $execution = $pending->executionSeconds($now);
+
+        if ($queued === null || $execution === null) {
+            return;
+        }
+
+        $this->requestMetrics->queueWait->record($queued);
+        $this->requestMetrics->execution->record($execution);
+        $this->requestMetrics->endToEnd->record($now - $pending->acceptedAt);
     }
 
     /**

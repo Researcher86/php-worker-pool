@@ -28,6 +28,9 @@ final readonly class Metrics
         public int $requestsFailed,
         public int $requestsTimeout,
         public int $requestsRejected,
+        public DurationSummary $queueWait,
+        public DurationSummary $execution,
+        public DurationSummary $endToEnd,
     ) {
     }
 
@@ -57,6 +60,11 @@ final readonly class Metrics
               Timeout: %d
               Rejected: %d
 
+            Latency (ms, over %d completed):
+              Queue wait: avg %.2f  max %.2f
+              Execution:  avg %.2f  max %.2f
+              Total:      avg %.2f  max %.2f
+
             TEXT,
             $this->workersTotal,
             $this->workersIdle,
@@ -71,6 +79,13 @@ final readonly class Metrics
             $this->requestsFailed,
             $this->requestsTimeout,
             $this->requestsRejected,
+            $this->endToEnd->count,
+            $this->queueWait->averageMs,
+            $this->queueWait->maxMs,
+            $this->execution->averageMs,
+            $this->execution->maxMs,
+            $this->endToEnd->averageMs,
+            $this->endToEnd->maxMs,
         );
     }
 }

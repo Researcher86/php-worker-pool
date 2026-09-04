@@ -33,6 +33,9 @@ final class Dispatcher
     /** @var \Closure(Message): void */
     private readonly \Closure $onResponse;
 
+    /** @var \Closure(string): void */
+    private readonly \Closure $onDispatched;
+
     /**
      * @param callable(Message): void $onResponse invoked with every response
      *        as soon as it's read from a worker — either a real reply, or the
@@ -43,8 +46,14 @@ final class Dispatcher
         private readonly WorkerPool $pool,
         private readonly EventLoop $loop,
         callable $onResponse,
+        // Invoked with a request's id the moment it reaches a worker - the
+        // boundary between "waiting for capacity" and "being worked on",
+        // which nothing else can observe from outside this class.
+        ?callable $onDispatched = null,
     ) {
         $this->onResponse = \Closure::fromCallable($onResponse);
+        $this->onDispatched = \Closure::fromCallable($onDispatched ?? static function (string $id): void {
+        });
     }
 
     /**
@@ -176,6 +185,7 @@ final class Dispatcher
                 continue;
             }
 
+            ($this->onDispatched)($request->id);
             $this->watch($worker);
         }
     }

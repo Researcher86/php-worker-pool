@@ -125,7 +125,7 @@ action declares, and a payload that doesn't fit comes back as
 | **Graceful shutdown** | SIGTERM drains in-flight work within one budget, then force-stops |
 | **Graceful reload** | SIGHUP swaps the whole generation without dropping a connection |
 | **Autoscaling** | grows on queue pressure, shrinks when idle |
-| **Metrics** | SIGUSR1 dumps a snapshot |
+| **Metrics** | SIGUSR1 dumps a snapshot, latency split into queue wait vs execution |
 
 ---
 
@@ -721,7 +721,8 @@ Example error:
 
 # Timeouts
 
-Requests may hang indefinitely.
+A request that never comes back is two problems, not one, and they need
+separate answers.
 
 ```text
 Request
@@ -730,25 +731,60 @@ Request
 Worker
    │
    ▼
-Never Returns
+Never returns
+   │
+   ├──▶ problem 1: someone is waiting
+   │
+   └──▶ problem 2: a worker slot is occupied
 ```
 
-Each request can have a deadline.
+## Request timeout - about the client
+
+The caller stops waiting.
 
 ```text
-Created: 10:00:00
-
-Timeout: 5 seconds
-
-Deadline: 10:00:05
+Created:  10:00:00
+Timeout:  30 seconds        (requestTimeoutSeconds)
+Deadline: 10:00:30
+              │
+              ▼
+   {"type":"error","payload":{"error":"request_timeout"}}
+              │
+              ▼
+   the pending request is removed and counted
 ```
 
-When the deadline expires, the Master can:
+Swept once a second, so a deadline is noticed within a second of passing.
+The worker is deliberately left alone here: it might be one millisecond from
+answering, and killing it would turn a slow request into a lost one.
 
-* return a timeout response;
-* remove the pending request;
-* mark the request as failed;
-* optionally terminate the Worker.
+## Execution timeout - about the pool
+
+The worker is not slow, it is never finishing.
+
+```text
+Dispatched: 10:00:00
+Limit:      60 seconds      (workerExecutionTimeoutSeconds)
+                │
+                ▼
+   SIGTERM ──▶ (still alive on the next sweep?) ──▶ SIGKILL
+                │
+                ▼
+   SIGCHLD ──▶ reaped ──▶ replacement forked
+                │
+                ▼
+   counted as a termination, not a crash
+```
+
+Without this, a handler stuck in a loop would hold its worker forever -
+costing the pool one slot permanently, per stuck request, until nothing is
+left to serve with.
+
+The two limits are separate numbers on purpose, and the execution limit sits
+above the request timeout: by the time it fires, the client left long ago
+and the question is no longer "is this late?" but "is this ever coming
+back?". A draining worker is exempt - it is already leaving, and its last
+request is finishing normally.
 
 ---
 
@@ -1057,13 +1093,19 @@ than returning the error payload as if it were a result.
 * [x] Worker metrics
 * [x] Queue metrics
 * [x] Request metrics
-* [ ] Request duration
-* [ ] Worker processing time
+* [x] Request duration
+* [x] Worker processing time
 
-The two timing metrics are deliberately not implemented: both need
-per-request timestamps (queued at, picked up at) that nothing in the
-codebase tracks, and this phase - unlike the others - has no Definition of
-Done requiring them. See PLAN.md Phase 17 for the reasoning.
+Reported as a breakdown rather than one number, because one number can't
+tell a saturated pool from a slow handler. Same 20ms handler, same clients,
+different pool size:
+
+```text
+8 workers, 8 clients          1 worker, 8 clients
+  Queue wait: avg   0.03ms      Queue wait: avg 139.72ms   ← the pool
+  Execution:  avg  21.50ms      Execution:  avg  20.94ms   ← the handler
+  Total:      avg  21.53ms      Total:      avg 160.66ms
+```
 
 ---
 

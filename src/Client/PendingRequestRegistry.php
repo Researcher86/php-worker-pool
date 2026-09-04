@@ -46,7 +46,8 @@ final class PendingRequestRegistry
     public function register(ClientConnection $client, string $originalId, float $timeoutSeconds): string
     {
         $id = 'req-' . $this->nextId++;
-        $this->pending[$id] = new PendingRequest($client, $originalId, $this->clock->now() + $timeoutSeconds);
+        $now = $this->clock->now();
+        $this->pending[$id] = new PendingRequest($client, $originalId, $now + $timeoutSeconds, $now);
 
         return $id;
     }
@@ -126,6 +127,17 @@ final class PendingRequestRegistry
         }
 
         return $orphaned;
+    }
+
+    /**
+     * Marks when a worker actually picked $id up - the boundary between
+     * queue time and execution time. Unknown ids are ignored: a request can
+     * be resolved (timed out, its client gone) between being dispatched and
+     * this arriving.
+     */
+    public function markDispatched(string $id, float $now): void
+    {
+        ($this->pending[$id] ?? null)?->markDispatched($now);
     }
 
     public function count(): int
