@@ -13,6 +13,9 @@ build:
 shell: up
 	docker compose exec php bash
 
+htop: up
+	docker compose exec php htop
+
 install: up
 	docker compose exec php composer install
 

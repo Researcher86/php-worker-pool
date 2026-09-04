@@ -7,4 +7,10 @@ services:
       - .:/app
     stdin_open: true
     tty: true
+    # Run an init as PID 1. Without one, PID 1 here is an interactive `php -a`
+    # that never calls wait(), so any process orphaned inside the container -
+    # a worker whose Master was killed, a forked test child - reparents to it
+    # and stays a zombie for the container's lifetime. The test suite alone
+    # left ~22 behind per run.
+    init: true
 

@@ -18,13 +18,32 @@ final class WorkerPoolClientTest extends TestCase
 {
     private string $path;
 
+    /** @var list<int> every server this test forked, reaped in tearDown */
+    private array $servers = [];
+
     protected function setUp(): void
     {
         $this->path = '/tmp/worker-pool-client-test-' . getmypid() . '.sock';
     }
 
+    /**
+     * Reaping here rather than at the end of each test: a test that ends via
+     * expectException never reaches the line after the throwing call, so any
+     * pcntl_waitpid() written there is dead code and the child is left
+     * unreaped - a zombie for as long as the container lives.
+     */
     protected function tearDown(): void
     {
+        foreach ($this->servers as $pid) {
+            if (posix_kill($pid, 0)) {
+                posix_kill($pid, SIGKILL);
+            }
+
+            pcntl_waitpid($pid, $status);
+        }
+
+        $this->servers = [];
+
         @unlink($this->path);
     }
 
@@ -44,6 +63,7 @@ final class WorkerPoolClientTest extends TestCase
             exit(0);
         }
 
+        $this->servers[] = $pid;
         $this->waitUntilListening();
 
         return $pid;
@@ -77,6 +97,7 @@ final class WorkerPoolClientTest extends TestCase
             exit(0);
         }
 
+        $this->servers[] = $pid;
         $this->waitUntilListening();
 
         return $pid;

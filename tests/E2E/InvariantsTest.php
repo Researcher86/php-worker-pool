@@ -35,8 +35,21 @@ final class InvariantsTest extends TestCase
     protected function tearDown(): void
     {
         if (is_resource($this->process)) {
+            // SIGTERM before SIGKILL, even in teardown: killing the Master
+            // outright orphans every worker it forked, and an orphan whose
+            // exit nobody waits for is a zombie until the container dies.
+            // Shutting it down properly makes it reap its own children.
             if (proc_get_status($this->process)['running']) {
-                proc_terminate($this->process, SIGKILL);
+                proc_terminate($this->process, SIGTERM);
+
+                $deadline = microtime(true) + 5.0;
+                while (proc_get_status($this->process)['running'] && microtime(true) < $deadline) {
+                    usleep(20_000);
+                }
+
+                if (proc_get_status($this->process)['running']) {
+                    proc_terminate($this->process, SIGKILL);
+                }
             }
 
             proc_close($this->process);

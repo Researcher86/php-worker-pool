@@ -2270,6 +2270,42 @@ effect is worse than none.
 
 ---
 
+# Post-Phase-20: Zombie Processes After the Test Suite
+
+Reported symptom: zombies accumulating in the dev container. Measured: 23
+before a run, 45 after - about 22 per `composer test`, growing until the
+container is recreated. Attributed per file: ChaosTest +10, InvariantsTest
++12, WorkerPoolClientTest +1.
+
+Two independent causes, both fixed.
+
+**PID 1 never reaped.** The compose service runs with `tty: true`, so PID 1
+was the base image's interactive `php -a` - a process that never calls
+wait(). Anything orphaned inside the container reparents to PID 1, and an
+orphan whose exit nobody waits for stays a zombie for the container's
+lifetime. `init: true` gives the service a real init (docker-init/tini) that
+reaps. This is the systemic fix: it covers orphans from any source, not just
+the ones the tests happen to produce today.
+
+**Two ways the tests created orphans in the first place.** Worth fixing
+regardless, since CI runs the suite without this container:
+
+- The end-to-end tests SIGKILLed the Master in teardown when it was still
+  running. Killing the Master outright orphans every worker it forked -
+  they exit on EOF but their parent is gone. Teardown now SIGTERMs, waits up
+  to 5s for the Master to shut its workers down properly, and only then
+  escalates.
+- `WorkerPoolClientTest::testAwaitingTheSameHandleTwiceThrows` reaped its
+  forked server on the line AFTER the call that throws - unreachable, since
+  `expectException` means the test method ends there. Every forked server is
+  now recorded and reaped in `tearDown()`, which runs whether the test ends
+  normally or by exception.
+
+After both: three consecutive full runs, 0 zombies each, 6 processes in the
+container throughout (down from 51).
+
+---
+
 # Recommended Implementation Order
 
 ## MVP
