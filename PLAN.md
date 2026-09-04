@@ -2277,32 +2277,39 @@ before a run, 45 after - about 22 per `composer test`, growing until the
 container is recreated. Attributed per file: ChaosTest +10, InvariantsTest
 +12, WorkerPoolClientTest +1.
 
-Two independent causes, both fixed.
+Every one of them had PPID 1, and PID 1 in this container is the base
+image's interactive `php -a` (the service runs with `tty: true`), a process
+that never calls wait(). So anything orphaned inside the container stays a
+zombie for the container's lifetime.
 
-**PID 1 never reaped.** The compose service runs with `tty: true`, so PID 1
-was the base image's interactive `php -a` - a process that never calls
-wait(). Anything orphaned inside the container reparents to PID 1, and an
-orphan whose exit nobody waits for stays a zombie for the container's
-lifetime. `init: true` gives the service a real init (docker-init/tini) that
-reaps. This is the systemic fix: it covers orphans from any source, not just
-the ones the tests happen to produce today.
+The tempting fix is `init: true` on the compose service, which gives it a
+real init that reaps. That was tried and rejected: it makes the symptom
+disappear without removing the cause, and the cause was two ordinary bugs in
+the tests - which matter on their own, since CI runs the suite with no
+container at all.
 
-**Two ways the tests created orphans in the first place.** Worth fixing
-regardless, since CI runs the suite without this container:
+**The end-to-end tests SIGKILLed the Master in teardown.** Killing the
+Master outright orphans every worker it forked: they exit on EOF, but their
+parent is gone and nobody waits for them. Teardown now sends SIGTERM, waits
+up to 5s for the Master to shut its own workers down, and escalates only if
+it has to (instrumented during the investigation: it never has to).
 
-- The end-to-end tests SIGKILLed the Master in teardown when it was still
-  running. Killing the Master outright orphans every worker it forked -
-  they exit on EOF but their parent is gone. Teardown now SIGTERMs, waits up
-  to 5s for the Master to shut its workers down properly, and only then
-  escalates.
-- `WorkerPoolClientTest::testAwaitingTheSameHandleTwiceThrows` reaped its
-  forked server on the line AFTER the call that throws - unreachable, since
-  `expectException` means the test method ends there. Every forked server is
-  now recorded and reaped in `tearDown()`, which runs whether the test ends
-  normally or by exception.
+**A reap sat after the call that throws.**
+`WorkerPoolClientTest::testAwaitingTheSameHandleTwiceThrows` called
+`pcntl_waitpid()` on the line following `$pending->await()`, which is
+unreachable - `expectException` means the test method ends at the throw.
+Forked servers are now recorded and reaped in `tearDown()`, which runs
+whether a test ends normally or by exception.
 
-After both: three consecutive full runs, 0 zombies each, 6 processes in the
-container throughout (down from 51).
+With those two fixed and no init: a fresh container, three consecutive full
+runs, 0 zombies after each, 5 processes throughout.
+
+One measurement artifact worth recording, since it briefly looked like a
+third leak: counting zombies immediately after phpunit exits attributes a
+worker that dies a moment later to the NEXT file's window. That is what
+produced a phantom "InvariantsTest +4" - running that file alone, eight
+times, leaked nothing, and adding a one-second settle before counting made
+it disappear.
 
 ---
 
