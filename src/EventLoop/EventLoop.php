@@ -105,26 +105,34 @@ final class EventLoop
         $except = [];
 
         // The `@` suppresses the "Interrupted system call" warning
-        // stream_select() raises if a signal arrives mid-call (Master
-        // relies on exactly that to wake up and check its shutdown flag on
-        // SIGINT/SIGTERM). On that path $read/$write are left unchanged —
-        // still every resource, not just the ready ones — since the call
-        // never completed; that's harmless here, each handler independently
-        // no-ops when there's nothing actually waiting for it (a write
-        // handler's flush attempt just writes 0 bytes). A genuine timeout
-        // (no activity, no signal), by contrast, correctly leaves both empty.
+        // stream_select() raises when a signal arrives mid-call - which
+        // Master relies on, since that is what wakes the loop to check its
+        // shutdown flag and drain the signal pipe.
+        //
+        // Three outcomes, and they must be told apart: a count > 0 means
+        // that many resources are ready; 0 means the timeout elapsed with
+        // nothing ready; false means the call was interrupted and never
+        // completed. On the false path PHP leaves $read/$write UNCHANGED -
+        // still holding every registered resource, not the ready ones - so
+        // handing that array to the loop below would invoke every handler
+        // for an event that never happened. Return instead: nothing is
+        // ready, the caller ticks again, and the loop keeps one contract -
+        // a handler runs only for a resource stream_select reported ready.
         if ($timeoutSeconds === null) {
-            @stream_select($read, $write, $except, null);
+            $ready = @stream_select($read, $write, $except, null);
         } else {
             $seconds = (int) $timeoutSeconds;
             $microseconds = (int) (($timeoutSeconds - $seconds) * 1_000_000);
 
-            @stream_select($read, $write, $except, $seconds, $microseconds);
+            $ready = @stream_select($read, $write, $except, $seconds, $microseconds);
         }
 
-        // stream_select() rewrites $read/$write in place to keep only the
-        // resources that are actually ready, so this only invokes handlers
-        // for those (or, on an interrupted call, every resource — see above).
+        if ($ready === false || $ready === 0) {
+            return;
+        }
+
+        // stream_select() rewrote $read/$write in place to keep only the
+        // resources that are actually ready.
         foreach ($read as $resource) {
             $id = (int) $resource;
 

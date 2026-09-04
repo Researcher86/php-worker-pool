@@ -20,6 +20,7 @@ final readonly class Metrics
         public int $workersBusy,
         public int $workersCrashedTotal,
         public int $workersRecycledTotal,
+        public int $workersTerminatedTotal,
         public int $workersDraining,
         public int $queueSize,
         public int $requestsTotal,
@@ -44,6 +45,7 @@ final readonly class Metrics
               Draining: %d
               Crashed (lifetime): %d
               Recycled (lifetime): %d
+              Terminated (lifetime): %d
 
             Queue:
               Pending: %d
@@ -62,6 +64,7 @@ final readonly class Metrics
             $this->workersDraining,
             $this->workersCrashedTotal,
             $this->workersRecycledTotal,
+            $this->workersTerminatedTotal,
             $this->queueSize,
             $this->requestsTotal,
             $this->requestsCompleted,

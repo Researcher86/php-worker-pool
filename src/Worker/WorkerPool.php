@@ -32,6 +32,12 @@ final class WorkerPool
     // so a rising number here doesn't read as instability.
     private int $totalRecycled = 0;
 
+    // Lifetime count of workers we killed for blowing the execution limit -
+    // counted apart from crashes because they mean something different: a
+    // crash is the worker failing, a termination is a REQUEST that never
+    // finished.
+    private int $totalTerminated = 0;
+
     // PLAN.md Phase 19/20 interaction: outgoing pids from reload() still
     // waiting for a replacement because launching one right away would push
     // the pool past $maxWorkers (relevant once Autoscaler can have grown it
@@ -138,6 +144,12 @@ final class WorkerPool
         return $this->totalRecycled;
     }
 
+    /** How many workers have been killed for exceeding the execution limit. */
+    public function totalTerminated(): int
+    {
+        return $this->totalTerminated;
+    }
+
     /**
      * Returns the id of any worker that can currently accept a request, or
      * null if every worker is busy, draining, stopping, or dead.
@@ -170,7 +182,7 @@ final class WorkerPool
             }
 
             $worker->write($message);
-            $worker->beginRequest($message->id);
+            $worker->beginRequest($message->id, $this->clock->now());
 
             return $worker;
         });
@@ -217,7 +229,10 @@ final class WorkerPool
             }
 
             $crashes[] = new WorkerCrash($worker, $lostRequestId);
-            $this->totalCrashed++;
+
+            $worker->isTerminating()
+                ? $this->totalTerminated++
+                : $this->totalCrashed++;
 
             if ($this->accepting) {
                 try {
@@ -386,6 +401,66 @@ final class WorkerPool
             $this->doRetireIdleWorkers();
 
             return $recycled;
+        });
+    }
+
+    /**
+     * Kills any worker that has held one request longer than
+     * $limitSeconds - the answer to a handler that will never return.
+     *
+     * This is deliberately NOT the same thing as a request timeout. That one
+     * is about the CLIENT: past its deadline the Master stops making someone
+     * wait and answers request_timeout. This one is about the POOL: the
+     * client left long ago, but the worker is still occupying a slot, and a
+     * handler stuck in an infinite loop would hold it forever - shrinking
+     * capacity by one, permanently, per stuck request. Hence two separate
+     * limits, and an execution limit that should sit comfortably above the
+     * request timeout: by the time it fires, the request is not late, it is
+     * never finishing.
+     *
+     * A drained worker is exempt: it is already leaving, and its request is
+     * finishing normally. There is no draining it here either - the whole
+     * point is that it will not finish on its own.
+     *
+     * SIGTERM first (workers run with default handlers, so it ends them
+     * immediately), escalating to SIGKILL on a later sweep for anything that
+     * somehow survived. Either way SIGCHLD reaps it, its request is reported
+     * to whoever is still waiting, and a replacement is forked - the same
+     * path a real crash takes.
+     *
+     * @return int how many were signalled this pass
+     */
+    public function terminateStuckWorkers(float $limitSeconds): int
+    {
+        return $this->withSigchldDeferred(function () use ($limitSeconds): int {
+            $now = $this->clock->now();
+            $signalled = 0;
+
+            foreach ($this->workers as $pid => $worker) {
+                $working = $worker->getWorkingSeconds($now);
+
+                if ($working === null || $working < $limitSeconds || $worker->isDraining()) {
+                    continue;
+                }
+
+                $escalate = $worker->isTerminating();
+                posix_kill($pid, $escalate ? SIGKILL : SIGTERM);
+
+                if (!$escalate) {
+                    $worker->markTerminating();
+                    $signalled++;
+
+                    $this->logger->log(sprintf(
+                        'terminating worker %d: request "%s" has run %.1fs (max %.1fs)',
+                        $pid,
+                        (string) $worker->getCurrentRequestId(),
+                        $working,
+                        $limitSeconds,
+                    ));
+                }
+            }
+
+            return $signalled;
         });
     }
 

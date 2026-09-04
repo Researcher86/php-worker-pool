@@ -2065,6 +2065,59 @@ suite got 35% faster as a side effect.
 
 ---
 
+# Post-Phase-20: Execution Timeout and Race Tests
+
+A second outside review, this time of the code rather than the README. Two
+of its points became work.
+
+**Two timeouts, not one.** Phase 14's request timeout is about the CLIENT:
+past its deadline the Master stops making someone wait and answers
+request_timeout. It says nothing about the worker, which keeps running - so
+a handler stuck in an infinite loop held its slot forever, costing the pool
+one worker permanently per stuck request. `workerExecutionTimeoutSeconds`
+(60s, deliberately above the 30s request timeout) is the pool-side limit:
+when it fires the request is not late, it is never finishing, so the worker
+gets SIGTERM (SIGKILL if it somehow survives to the next sweep) and SIGCHLD
+replaces it like any crash. Terminations are counted apart from crashes,
+because they mean different things - a crash is the worker failing, a
+termination is a request that never returned. A draining worker is exempt:
+it is already leaving and its request is finishing normally.
+
+Verified live: with a 2s request timeout and a 5s execution limit against a
+handler that loops forever, the client got request_timeout at 2.0s, the log
+recorded `terminating worker 1194: request "req-1" has run 5.0s (max 5.0s)`,
+the pool was back to full strength immediately, and the metrics read
+Terminated 1 / Crashed 0.
+
+**EventLoop's contract, made explicit.** `stream_select()` has three
+outcomes and the loop treated two of them the same: on EINTR it returns
+false and leaves the resource arrays UNCHANGED - every registered resource,
+not the ready ones - so handlers ran for events that never happened. It
+happened to be harmless (each handler no-ops on an empty read) but the
+contract was "a handler runs when its resource is ready OR when a signal
+arrived", which is not a contract anyone can reason about. Now the three
+outcomes are distinguished and only a positive count invokes handlers.
+
+**Tests for the windows async signals open.** `ReapRaceTest` drives the
+reaper at exactly the point SIGCHLD could land - between `getAvailable()`
+and `write()` - and asserts the dispatch refuses cleanly and the request is
+requeued rather than lost; it also covers the review's sharpest observation,
+that a worker marked DEAD but not yet reaped must count as neither capacity
+nor headroom. `ChaosTest` does the same for things only real processes can
+show: a 100-request burst all answered, a worker killed outright and
+replaced, SIGHUP swapping a generation with 20 requests in flight and none
+dropped, and SIGTERM answering everything it had accepted before removing
+the socket.
+
+**Not done, on purpose.** The review's other main point was that WorkerPool
+carries too many responsibilities - registry, supervisor, recycler, reload,
+scaling, shutdown - and it is right. It also said not to split it yet, and
+that is right too: 570 readable lines beat a constellation of managers. The
+boundary instead is a rule - no further lifecycle feature goes into
+WorkerPool without extracting one first.
+
+---
+
 # Recommended Implementation Order
 
 ## MVP

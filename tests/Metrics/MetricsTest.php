@@ -18,6 +18,7 @@ final class MetricsTest extends TestCase
             workersBusy: 5,
             workersCrashedTotal: 0,
             workersRecycledTotal: 12,
+            workersTerminatedTotal: 3,
             workersDraining: 1,
             queueSize: 124,
             requestsTotal: 100_000,
@@ -31,7 +32,7 @@ final class MetricsTest extends TestCase
 
         $this->assertStringContainsString('Worker Pool Status', $formatted);
         $this->assertStringContainsString(
-            "Workers:\n  Total: 8\n  Idle: 3\n  Busy: 5\n  Draining: 1\n  Crashed (lifetime): 0\n  Recycled (lifetime): 12",
+            "Workers:\n  Total: 8\n  Idle: 3\n  Busy: 5\n  Draining: 1\n  Crashed (lifetime): 0\n  Recycled (lifetime): 12\n  Terminated (lifetime): 3",
             $formatted
         );
         $this->assertStringContainsString("Queue:\n  Pending: 124", $formatted);

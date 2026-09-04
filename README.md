@@ -114,7 +114,7 @@ action declares, and a payload that doesn't fit comes back as
 | **Correlation ids** | responses come back in any order and still reach the right caller |
 | **Multiplexing** | many requests in flight per connection, client side included |
 | **Backpressure** | a bounded queue that rejects instead of growing until OOM |
-| **Timeouts** | per-request deadlines, swept once a second |
+| **Timeouts** | two of them: a request deadline that answers the client, and an execution limit that kills a handler which will never return |
 | **Crash recovery** | SIGCHLD, the dead worker's request failed, a replacement forked |
 | **Worker recycling** | replaced after N requests / an age / a memory ceiling - drained, never killed mid-request |
 | **Graceful shutdown** | SIGTERM drains in-flight work within one budget, then force-stops |

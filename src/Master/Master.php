@@ -70,6 +70,13 @@ final class Master
         // PLAN.md Phase 14: how long a client waits for a response before
         // the Master gives up on its behalf and reports a timeout instead.
         private readonly float $requestTimeoutSeconds = 30.0,
+        // A different limit from the one above, for a different problem.
+        // requestTimeout is about the CLIENT: stop making it wait. This is
+        // about the POOL: a handler that never returns would hold its worker
+        // forever, costing one slot permanently. Set above the request
+        // timeout on purpose - when this fires, the request isn't late, it's
+        // never finishing, so the worker is killed and replaced.
+        private readonly float $workerExecutionTimeoutSeconds = 60.0,
         // PLAN.md Phase 16's safety timeout: once a shutdown signal arrives,
         // queued and in-flight requests get this long, total, to finish
         // before the Master gives up on whoever's left and force-stops the
@@ -141,6 +148,7 @@ final class Master
                 $this->dispatcher->dispatchQueued();
 
                 $this->sendTimeouts();
+                $this->pool->terminateStuckWorkers($this->workerExecutionTimeoutSeconds);
                 $this->pool->recycleExhaustedWorkers();
                 $this->pool->retireIdleWorkers();
                 $autoscaler->check();

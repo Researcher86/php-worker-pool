@@ -390,6 +390,11 @@ the code.
                         removeExpired, swept once
                         a second)
 
+  Master main loop     one worker has held ONE       (client already got
+   (per tick)          request past the execution     request_timeout; the
+                       limit, 60s - it is killed      worker is killed so the
+                       and replaced                   pool gets its slot back)
+
   Dispatcher / SIGCHLD the worker died holding       error worker_crashed
                        the request
 
@@ -422,6 +427,11 @@ starved by silence):
 
       $this->sendTimeouts();           ← PendingRequestRegistry::removeExpired
                                           → error request_timeout per entry
+
+      $pool->terminateStuckWorkers(..);← a worker that has held ONE request past
+                                          the execution limit is killed and
+                                          replaced: the client gave up long ago,
+                                          but the slot is still occupied
 
       $pool->recycleExhaustedWorkers();← a worker past maxRequests, maxLifetime
                                           or maxMemory is DRAINED and replaced;

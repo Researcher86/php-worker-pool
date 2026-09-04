@@ -48,6 +48,10 @@ final class WorkerProcess
 
     private ?float $startedAt = null;
 
+    // When the current request was dispatched here, per the pool's clock.
+    // What separates "this worker is busy" from "this worker is stuck".
+    private ?float $requestStartedAt = null;
+
     public function __construct(
         private readonly int $pid,
         private readonly Socket $socket,
@@ -55,6 +59,8 @@ final class WorkerProcess
         private ?string $currentRequestId = null,
     ) {
     }
+
+    private bool $terminating = false;
 
     /** How many requests this worker has completed since it was forked. */
     public function getHandledRequests(): int
@@ -117,12 +123,27 @@ final class WorkerProcess
      * Marks the worker as busy with the given request, then returns
      * IDLE once the request has finished.
      */
-    public function beginRequest(string $requestId): void
+    public function beginRequest(string $requestId, ?float $now = null): void
     {
         $this->assertTransitions(self::AVAILABLE_STATES);
 
         $this->currentRequestId = $requestId;
+        $this->requestStartedAt = $now;
         $this->state = WorkerState::BUSY;
+    }
+
+    /**
+     * How long the current request has been running, or null if the worker
+     * isn't working (or was dispatched to without a timestamp, which only
+     * happens in tests driving WorkerProcess directly).
+     */
+    public function getWorkingSeconds(float $now): ?float
+    {
+        if ($this->currentRequestId === null || $this->requestStartedAt === null) {
+            return null;
+        }
+
+        return $now - $this->requestStartedAt;
     }
 
     public function finishRequest(): void
@@ -138,6 +159,7 @@ final class WorkerProcess
         $this->assertTransitions([WorkerState::BUSY, WorkerState::DRAINING]);
 
         $this->currentRequestId = null;
+        $this->requestStartedAt = null;
         $this->handledRequests++;
 
         // A worker drained mid-request stays DRAINING: it just answered its
@@ -199,6 +221,24 @@ final class WorkerProcess
     {
         $this->state = WorkerState::DEAD;
         $this->currentRequestId = null;
+        $this->requestStartedAt = null;
+    }
+
+    /**
+     * Records that WE ended this worker rather than it dying on its own -
+     * so the reaper counts it as a termination, not a crash. A rising crash
+     * count means something is wrong with the workers; a rising termination
+     * count means requests are exceeding their execution limit, which is a
+     * different problem with a different fix.
+     */
+    public function markTerminating(): void
+    {
+        $this->terminating = true;
+    }
+
+    public function isTerminating(): bool
+    {
+        return $this->terminating;
     }
 
     /** @param list<WorkerState> $allowed */

@@ -31,6 +31,7 @@ final readonly class MetricsCollector
             workersBusy: $this->pool->countBusy(),
             workersCrashedTotal: $this->pool->totalCrashed(),
             workersRecycledTotal: $this->pool->totalRecycled(),
+            workersTerminatedTotal: $this->pool->totalTerminated(),
             workersDraining: $this->pool->countDraining(),
             queueSize: $this->queue->size(),
             requestsTotal: $this->requests->total(),
