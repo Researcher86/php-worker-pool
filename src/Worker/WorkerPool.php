@@ -156,7 +156,7 @@ final class WorkerPool
     /**
      * Dispatches $message to $workerId, or returns null if that worker can
      * no longer take it: with async SIGCHLD, a worker can be reaped (or
-     * marked retiring) between the caller's getAvailable() and this call -
+     * drained) between the caller's getAvailable() and this call -
      * the deferred section makes the check-and-dispatch atomic against the
      * reaper, and null tells the caller to simply pick another worker.
      */
@@ -183,11 +183,11 @@ final class WorkerPool
      * shutting down, immediately replaced so the pool stays at its
      * configured size.
      *
-     * A worker in STOPPING when it's reaped was told to stop by us (either
-     * stop() or a reload() retirement, PLAN.md Phase 19) - that's an
-     * expected exit, not a crash: no WorkerCrash, no totalCrashed bump, and
-     * no replacement, since retireIdleWorkers() already launched one when
-     * it decided to retire this one.
+     * A worker in STOPPING when it's reaped was told to stop by us - a
+     * shutdown, or the end of a drain (reload, scale-down, recycling).
+     * That's an expected exit, not a crash: no WorkerCrash, no
+     * totalCrashed bump, and no replacement, since whoever drained it
+     * already launched one.
      *
      * @return list<WorkerCrash>
      */
@@ -466,8 +466,8 @@ final class WorkerPool
     /**
      * PLAN.md Phase 20: retires up to $count currently-idle workers - never
      * a busy one, this is routine downscaling under low load, not a reload,
-     * so there's no reason to wait on anything. Reuses reload()'s retiring
-     * mechanism for a subset rather than the whole pool: mark, then let
+     * so there's no reason to wait on anything. Reuses the same DRAINING
+     * mechanism for a subset rather than the whole pool: drain, then let
      * retireIdleWorkers() (already idle, so this resolves immediately)
      * actually shut them down.
      *
@@ -594,10 +594,10 @@ final class WorkerPool
      * one arriving meanwhile is delivered the moment the mask is restored.
      *
      * With pcntl_async_signals(true) (how Master runs), the SIGCHLD handler
-     * - which calls reapDeadWorkers(), mutating $workers and the retiring
-     * bookkeeping - can otherwise fire between ANY two statements here: in
+     * - which calls reapDeadWorkers(), mutating $workers and worker states
+     * - can otherwise fire between ANY two statements here: in
      * the middle of stop()'s iteration over $workers, between scaleDown()
-     * marking a pid retiring and actually retiring it, and so on. Worse,
+     * draining a worker and actually retiring it, and so on. Worse,
      * stop()'s own waitpid() loop would compete with the handler's for the
      * same child exits, making its $awaiting count miss workers the handler
      * reaped first. Deferring delivery for the duration of one mutating

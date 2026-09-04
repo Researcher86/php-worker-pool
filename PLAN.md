@@ -446,6 +446,14 @@ STOPPING
 DEAD
 ```
 
+**Later addition:** a sixth state, `DRAINING`, was added after Phase 20 -
+"takes no new request, but finish the one you have". Phase 19's reload and
+Phase 20's scale-down both needed that meaning and expressed it with a
+parallel `WorkerPool::$retiringPids` map instead; folding it into the state
+machine deleted the map and gave worker recycling the same mechanism for
+free. See "Recycling, Benchmarks, Onboarding" below, and README's Worker
+Lifecycle for the current diagram.
+
 ## Tasks
 
 * [x] Create WorkerProcess class

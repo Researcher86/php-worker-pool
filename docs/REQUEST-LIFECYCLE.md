@@ -177,7 +177,7 @@ through to its answer.
           │  while the queue is not empty:
           │      workerId = pool->getAvailable()
           │          └─ first worker that is STARTING or IDLE,
-          │             skipping BUSY, STOPPING/retiring and DEAD ones
+          │             skipping BUSY, DRAINING, STOPPING and DEAD ones
           │
           │      none available? → return, leave the rest queued
           │                        (a worker finishing will pump again)
@@ -457,8 +457,8 @@ ordinary sequential code.
               replace each crashed one, and fail the request it was
               holding with worker_crashed
         'H' → pool->reload(): start a fresh generation, mark the old one
-              retiring; a BUSY old worker is left completely alone until
-              it finishes - no in-flight request is ever dropped
+              DRAINING; a busy old worker is left completely alone
+              until it finishes - no in-flight request is ever dropped
         'U' → print the metrics snapshot to stdout
 
    SIGINT / SIGTERM ──▶ set $running = false     ← the loop notices on the
