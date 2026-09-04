@@ -2,10 +2,15 @@
 
 > A production-inspired multi-process Worker Pool for PHP: persistent worker processes, IPC over socket pairs, a Unix domain socket front door, and a single-threaded event-driven Master.
 
-An educational project that answers one question by building the answer:
-**how does a worker-based PHP runtime actually work inside?** Not a
-replacement for RoadRunner, Swoole, FrankenPHP or PHP-FPM - a from-scratch
-implementation of the mechanisms they are built on.
+A **PHP runtime engineering playground**: one small, readable
+implementation of every mechanism a worker-based runtime is built from, so
+that any one of them can be opened and understood on its own.
+
+The goal is not to compete with RoadRunner, Swoole, FrankenPHP or PHP-FPM.
+It is to have somewhere to look when you need to remember how process
+supervision, message framing, or an event loop actually works - with a
+version small enough to read in one sitting and real enough to run, crash,
+reload and benchmark.
 
 Production-*inspired*, not production-*ready*: it is a single-node runtime
 with at-most-once delivery and a Master that is a single point of failure.
@@ -126,6 +131,36 @@ action declares, and a payload that doesn't fit comes back as
 | **Graceful reload** | SIGHUP swaps the whole generation without dropping a connection |
 | **Autoscaling** | grows on queue pressure, shrinks when idle |
 | **Metrics** | SIGUSR1 dumps a snapshot, latency split into queue wait vs execution |
+
+---
+
+## The mechanisms, and where to read each one
+
+Every file below is standalone enough to open cold. The comments explain
+*why* each decision was made, not what the code does - that is what makes
+them worth returning to.
+
+| To remember how… | Open |
+|---|---|
+| a child process is forked and its file descriptors kept straight | [`IPC/SocketPair.php`](src/IPC/SocketPair.php) · [`Worker/ForkedWorkerLauncher.php`](src/Worker/ForkedWorkerLauncher.php) |
+| messages are framed over a byte stream (partial reads, several per read) | [`Protocol/MessageDecoder.php`](src/Protocol/MessageDecoder.php) |
+| a partial write is finished instead of silently truncating a frame | [`IPC/Socket.php`](src/IPC/Socket.php) |
+| a reactor multiplexes every socket in one `stream_select()` | [`EventLoop/EventLoop.php`](src/EventLoop/EventLoop.php) |
+| connections are accepted without capping the rate at one per tick | [`Server/UnixSocketServer.php`](src/Server/UnixSocketServer.php) |
+| a slow client is served without blocking everyone else | [`Client/ClientConnection.php`](src/Client/ClientConnection.php) |
+| responses find their way back to the right caller, in any order | [`Client/PendingRequestRegistry.php`](src/Client/PendingRequestRegistry.php) |
+| backpressure works, and why the queue is bounded | [`Queue/RequestQueue.php`](src/Queue/RequestQueue.php) |
+| work is handed to a free worker, and what happens when one dies | [`Dispatcher/Dispatcher.php`](src/Dispatcher/Dispatcher.php) |
+| a worker's state machine is written down as one table | [`Worker/WorkerProcess.php`](src/Worker/WorkerProcess.php) |
+| crashes, reload, recycling, scaling and shutdown share one owner | [`Worker/WorkerPool.php`](src/Worker/WorkerPool.php) |
+| a pool decides to grow or shrink | [`Worker/Autoscaler.php`](src/Worker/Autoscaler.php) |
+| a worker is replaced before it leaks, without dropping its request | [`Worker/RecyclingPolicy.php`](src/Worker/RecyclingPolicy.php) |
+| signals are handled without doing the work inside the handler | [`Master/Master.php`](src/Master/Master.php) |
+| a worker loop stays alive through a handler that throws | [`Worker/WorkerRunner.php`](src/Worker/WorkerRunner.php) |
+| a client keeps several requests in flight at once | [`Sdk/WorkerPoolClient.php`](src/Sdk/WorkerPoolClient.php) |
+
+Following a single request through all of them instead:
+[docs/REQUEST-LIFECYCLE.md](docs/REQUEST-LIFECYCLE.md).
 
 ---
 
