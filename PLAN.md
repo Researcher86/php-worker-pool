@@ -2118,6 +2118,87 @@ WorkerPool without extracting one first.
 
 ---
 
+# Post-Phase-20: Failure Semantics and Invariant Tests
+
+A third review, this one framed as a PR review with a Request-changes
+verdict and five must-fix items. Four became work; one was already done.
+
+**Already done: timeout vs cancellation.** Asked for a client deadline and a
+worker execution deadline as separate concepts, with SIGTERM -> grace ->
+SIGKILL -> reap -> replacement, and a test driving a handler into an
+infinite loop. That shipped in the previous pass - see "Execution Timeout
+and Race Tests" above.
+
+**Delivery semantics, written down.** The review's sharpest point: a worker
+that dies AFTER running a handler but BEFORE its response is delivered is
+indistinguishable, from the Master's side, from one that died before running
+it at all. `worker_crashed` therefore means "may or may not have taken
+effect", and a retry on top of it can double-execute. That was true and
+undocumented, which is the dangerous combination.
+`docs/FAILURE-MODEL.md` now states it plainly, along with why the runtime
+deliberately offers no automatic retry.
+
+**Master failure model, written down.** Same document: the Master is a
+single point of failure holding the queue, the pending registry, worker
+state and client connections in memory only, and a crash is total loss of
+work in progress. Also documented there: global-FIFO scheduling with no
+fairness between clients (a real noisy-neighbour exposure), the two
+different write models and the 5s bound the IPC one can impose on the
+Master, and the absence of protocol versioning.
+
+**Lifecycle ownership.** The review asked who owns worker state transitions
+when the autoscaler, reload, recycling, the execution-timeout sweep and
+shutdown can all want one. The answer was already "WorkerPool, and every
+transition goes through WorkerProcess's guard under deferred SIGCHLD" - but
+it was implicit, which is not much better than not being true. It is now
+stated on the class, together with the reason the class stays whole:
+splitting supervision across a Recycler, a ReloadManager and a Scaler that
+each mutate shared worker state would recreate the races a single owner
+exists to prevent.
+
+**A formal transition matrix.** `WorkerProcess` had five hand-rolled guards;
+it now has one declarative table, and `apply()` is the only thing in the
+class that assigns a state. `StateTransitionMatrixTest` asserts all thirty
+cells, legal and illegal, and fails if a state is ever added without a row -
+which is the point of writing the machine down rather than scattering it.
+
+**Invariant tests.** `tests/E2E/InvariantsTest.php` asserts the six
+properties the review listed, against a real Master: one request per worker
+at a time, exactly one terminal outcome per accepted request, DEAD and
+DRAINING workers never receiving work, replacements never exceeding
+maxWorkers, and nothing outliving shutdown. Plus the combination test it
+asked for - a 120-request burst with a worker killed, a SIGHUP, ten clients
+vanishing mid-request and recycling churning underneath.
+
+## Two real bugs the invariant tests found
+
+Both are the kind that only combination testing surfaces, and neither was
+visible in any single-mechanism test.
+
+**Requests dropped silently on shutdown.** `Master::shutdown()` drained
+while `pendingRequests->count() > 0`. A request a client had already sent
+but the Master had not yet READ is not pending - it is bytes in a socket -
+so a SIGTERM arriving just after a burst found count() === 0, skipped
+draining entirely, and dropped every one of them without a word. Shutdown
+now takes one non-blocking pass over every ready fd first, so work already
+accepted is answered. Found by running the chaos suite fifty times: it
+failed once, on run 44.
+
+**Connection accept rate capped at one per tick.** `UnixSocketServer` took a
+single connection per readable event, so the server's connection rate was
+bounded by the event loop's iteration rate - and the default listen backlog
+overran at 34 concurrent connects, after which clients got a failed connect
+rather than a queued one. That is worst exactly where this project aims:
+PHP-FPM, where every request is a new connection. It now drains the accept
+queue (bounded at 64 per tick, so a connection flood cannot starve
+everything else) and asks for a backlog of 511. Measured before and after:
+34 of 200 connections succeeded, then 200 of 200.
+
+After both fixes the chaos and invariant suites ran fifty consecutive times
+with zero failures.
+
+---
+
 # Recommended Implementation Order
 
 ## MVP

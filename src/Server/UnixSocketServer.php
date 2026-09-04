@@ -13,6 +13,27 @@ use App\EventLoop\EventLoop;
  */
 final class UnixSocketServer
 {
+    /**
+     * How many pending connections the kernel will hold for us between
+     * accepts. PHP's default is small (34 usable in this project's own
+     * container), which a burst of clients overruns instantly - and an
+     * overrun backlog means the client's connect() fails outright rather
+     * than waiting its turn. 511 is the figure nginx uses for the same
+     * reason.
+     */
+    private const int BACKLOG = 511;
+
+    /**
+     * Connections accepted per readable event. Accepting only ONE per event
+     * loop iteration caps the whole server's connection rate at one per
+     * tick, which matters precisely in the case this project is built for -
+     * PHP-FPM, where every request is a new connection. Accepting until the
+     * listener is drained fixes that, but unbounded it would let a flood of
+     * connections starve every other event source for as long as it lasts,
+     * so the drain is capped and the rest wait for the next tick.
+     */
+    private const int MAX_ACCEPTS_PER_TICK = 64;
+
     /** @var resource */
     private mixed $server;
 
@@ -36,7 +57,8 @@ final class UnixSocketServer
             'unix://' . $path,
             $errno,
             $errstr,
-            STREAM_SERVER_BIND | STREAM_SERVER_LISTEN
+            STREAM_SERVER_BIND | STREAM_SERVER_LISTEN,
+            stream_context_create(['socket' => ['backlog' => self::BACKLOG]])
         );
 
         if ($this->server === false) {
@@ -48,24 +70,27 @@ final class UnixSocketServer
         $this->loop->addReadable($this->server, $this->accept(...));
     }
 
+    /**
+     * Drains the accept queue, up to MAX_ACCEPTS_PER_TICK, rather than
+     * taking a single connection per readable event.
+     *
+     * The `@` suppresses the "Accept failed" warning that a zero-timeout
+     * accept raises when the queue is empty - which is the normal way this
+     * loop ends, not an error.
+     */
     private function accept(): void
     {
-        // Unlike Socket, this doesn't re-check readiness itself before
-        // acting — it trusts the EventLoop already confirmed the listener
-        // is readable. That confirmation can be spurious (EventLoop::tick()
-        // interrupted by a signal reports every registered resource, not
-        // just ready ones); the `@` suppresses the resulting "Accept
-        // failed: Connection timed out" warning, and the false-check below
-        // already handles that case correctly either way.
-        $client = @stream_socket_accept($this->server, 0);
+        for ($accepted = 0; $accepted < self::MAX_ACCEPTS_PER_TICK; $accepted++) {
+            $client = @stream_socket_accept($this->server, 0);
 
-        if ($client === false) {
-            return;
+            if ($client === false) {
+                return; // queue drained (or the readable event was spurious)
+            }
+
+            stream_set_blocking($client, false);
+
+            ($this->onConnect)($client);
         }
-
-        stream_set_blocking($client, false);
-
-        ($this->onConnect)($client);
     }
 
     public function close(): void

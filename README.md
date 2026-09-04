@@ -7,6 +7,11 @@ An educational project that answers one question by building the answer:
 replacement for RoadRunner, Swoole, FrankenPHP or PHP-FPM - a from-scratch
 implementation of the mechanisms they are built on.
 
+Production-*inspired*, not production-*ready*: it is a single-node runtime
+with at-most-once delivery and a Master that is a single point of failure.
+[docs/FAILURE-MODEL.md](docs/FAILURE-MODEL.md) is explicit about every one
+of those edges.
+
 ```text
   your PHP code ──▶ Unix socket ──▶ Master ──▶ worker pool ──▶ back again
                                     (event loop, queue, supervisor)
@@ -129,6 +134,7 @@ action declares, and a payload that doesn't fit comes back as
 | | |
 |---|---|
 | **[docs/REQUEST-LIFECYCLE.md](docs/REQUEST-LIFECYCLE.md)** | one request followed hop by hop, client to worker and back, with every failure path |
+| **[docs/FAILURE-MODEL.md](docs/FAILURE-MODEL.md)** | what breaks, what survives it, and what the runtime does *not* guarantee - read before trusting it with anything |
 | **[docs/BENCHMARKS.md](docs/BENCHMARKS.md)** | measured throughput and latency, where it scales and where it stops |
 | **[PLAN.md](PLAN.md)** | the 20 phases this was built in, and why each mechanism exists |
 | the rest of this file | the concepts, in depth |

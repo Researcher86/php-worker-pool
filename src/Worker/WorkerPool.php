@@ -11,6 +11,29 @@ use App\Support\Logger;
 use App\Support\NullLogger;
 use App\Support\SystemClock;
 
+/**
+ * Owner of every worker's lifecycle. Nothing else in the system moves a
+ * worker between states.
+ *
+ * Five subsystems want workers to come and go - the autoscaler, reload,
+ * recycling, the execution-timeout sweep, and shutdown - and if each drove
+ * transitions itself they would race: two of them replacing the same worker,
+ * a scale-down retiring the generation a reload just started, a crash
+ * handler reviving something shutdown had given up on. They don't. They call
+ * an intention here (scaleUp/scaleDown, reload, recycleExhaustedWorkers,
+ * terminateStuckWorkers, stop) and this class decides what actually happens
+ * to which worker, under a single rule: every state change goes through
+ * WorkerProcess's transition table, and every mutation of the pool runs with
+ * SIGCHLD deferred so the reaper cannot interleave with it.
+ *
+ * That is also why this class is large. It is a supervisor, and supervision
+ * is one responsibility even when it has many triggers - splitting it into
+ * a Recycler, a ReloadManager and a Scaler that each mutate shared worker
+ * state would recreate exactly the races the single owner exists to
+ * prevent. See PLAN.md for the boundary rule that keeps it from growing
+ * further: a new lifecycle feature does not go in here without something
+ * else coming out.
+ */
 final class WorkerPool
 {
     /** @var array<int, WorkerProcess> */

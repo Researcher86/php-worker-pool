@@ -43,6 +43,70 @@ final class WorkerProcess
 {
     private const array AVAILABLE_STATES = [WorkerState::STARTING, WorkerState::IDLE];
 
+    /**
+     * The whole state machine, stated once: event => (state it is legal
+     * from => state it leads to). Anything absent is illegal and throws.
+     *
+     * Keyed by ->name because enum cases cannot be array keys. Written as a
+     * table rather than five hand-rolled guards so that adding a state means
+     * editing one place and immediately seeing every event it has to answer
+     * for - the alternative is an `if ($state === ...)` in fifteen methods,
+     * which is how state machines rot.
+     *
+     *   FROM        dispatch    respond     drain       stop        die
+     *   ─────────────────────────────────────────────────────────────────
+     *   STARTING    BUSY        -           DRAINING    STOPPING    DEAD
+     *   IDLE        BUSY        -           DRAINING    STOPPING    DEAD
+     *   BUSY        -           IDLE        DRAINING    STOPPING    DEAD
+     *   DRAINING    -           DRAINING    DRAINING    STOPPING    DEAD
+     *   STOPPING    -           -           STOPPING    STOPPING    DEAD
+     *   DEAD        -           DEAD        DEAD        -           DEAD
+     *
+     * Three entries look odd and are deliberate:
+     *  - DRAINING + respond stays DRAINING, so a worker that just answered
+     *    its last request cannot be handed another before it retires.
+     *  - STOPPING/DEAD + drain is a no-op rather than an error: draining
+     *    something already on its way out is a step backwards, not a bug.
+     *  - DEAD + respond is tolerated because the reaper can mark a worker
+     *    dead between its response arriving and being processed.
+     *
+     * @var array<string, array<string, WorkerState>>
+     */
+    private const array TRANSITIONS = [
+        'dispatch' => [
+            'STARTING' => WorkerState::BUSY,
+            'IDLE' => WorkerState::BUSY,
+        ],
+        'respond' => [
+            'BUSY' => WorkerState::IDLE,
+            'DRAINING' => WorkerState::DRAINING,
+            'DEAD' => WorkerState::DEAD,
+        ],
+        'drain' => [
+            'STARTING' => WorkerState::DRAINING,
+            'IDLE' => WorkerState::DRAINING,
+            'BUSY' => WorkerState::DRAINING,
+            'DRAINING' => WorkerState::DRAINING,
+            'STOPPING' => WorkerState::STOPPING,
+            'DEAD' => WorkerState::DEAD,
+        ],
+        'stop' => [
+            'STARTING' => WorkerState::STOPPING,
+            'IDLE' => WorkerState::STOPPING,
+            'BUSY' => WorkerState::STOPPING,
+            'DRAINING' => WorkerState::STOPPING,
+            'STOPPING' => WorkerState::STOPPING,
+        ],
+        'die' => [
+            'STARTING' => WorkerState::DEAD,
+            'IDLE' => WorkerState::DEAD,
+            'BUSY' => WorkerState::DEAD,
+            'DRAINING' => WorkerState::DEAD,
+            'STOPPING' => WorkerState::DEAD,
+            'DEAD' => WorkerState::DEAD,
+        ],
+    ];
+
     /** The two counters recycling decides on - see WorkerPool::recycleExhaustedWorkers(). */
     private int $handledRequests = 0;
 
@@ -125,11 +189,10 @@ final class WorkerProcess
      */
     public function beginRequest(string $requestId, ?float $now = null): void
     {
-        $this->assertTransitions(self::AVAILABLE_STATES);
+        $this->apply('dispatch');
 
         $this->currentRequestId = $requestId;
         $this->requestStartedAt = $now;
-        $this->state = WorkerState::BUSY;
     }
 
     /**
@@ -156,18 +219,12 @@ final class WorkerProcess
             return;
         }
 
-        $this->assertTransitions([WorkerState::BUSY, WorkerState::DRAINING]);
+        // BUSY -> IDLE, DRAINING -> DRAINING: see the table.
+        $this->apply('respond');
 
         $this->currentRequestId = null;
         $this->requestStartedAt = null;
         $this->handledRequests++;
-
-        // A worker drained mid-request stays DRAINING: it just answered its
-        // last request and is now free to be retired, not free to take
-        // another one.
-        if ($this->state === WorkerState::BUSY) {
-            $this->state = WorkerState::IDLE;
-        }
     }
 
     /**
@@ -186,11 +243,7 @@ final class WorkerProcess
      */
     public function drain(): void
     {
-        if ($this->state === WorkerState::STOPPING || $this->state === WorkerState::DEAD) {
-            return;
-        }
-
-        $this->state = WorkerState::DRAINING;
+        $this->apply('drain');
     }
 
     public function isDraining(): bool
@@ -205,21 +258,16 @@ final class WorkerProcess
      */
     public function stop(): void
     {
-        $this->assertTransitions([
-            WorkerState::STARTING,
-            WorkerState::IDLE,
-            WorkerState::BUSY,
-            WorkerState::DRAINING,
-            WorkerState::STOPPING,
-        ]);
+        $this->apply('stop');
 
         $this->currentRequestId = null;
-        $this->state = WorkerState::STOPPING;
+        $this->requestStartedAt = null;
     }
 
     public function markDead(): void
     {
-        $this->state = WorkerState::DEAD;
+        $this->apply('die');
+
         $this->currentRequestId = null;
         $this->requestStartedAt = null;
     }
@@ -241,14 +289,22 @@ final class WorkerProcess
         return $this->terminating;
     }
 
-    /** @param list<WorkerState> $allowed */
-    private function assertTransitions(array $allowed): void
+    /**
+     * Applies $event per TRANSITIONS, or throws if this state has no answer
+     * for it. The single gate every state change goes through - there is no
+     * other assignment to $this->state in this class.
+     */
+    private function apply(string $event): void
     {
-        if (!in_array($this->state, $allowed, true)) {
+        $next = self::TRANSITIONS[$event][$this->state->name] ?? null;
+
+        if ($next === null) {
             throw new \LogicException(
-                sprintf('Illegal transition from state %s', $this->state->name)
+                sprintf('Illegal transition: cannot %s a worker in state %s', $event, $this->state->name)
             );
         }
+
+        $this->state = $next;
     }
 
     public function write(Message $message): void

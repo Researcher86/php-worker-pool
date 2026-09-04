@@ -354,6 +354,22 @@ final class Master
     {
         $server->close();
 
+        // Absorb what clients have already sent but we haven't read yet.
+        // Those bytes are ours - the request was accepted the moment it
+        // landed in our socket - but until this pass runs they exist
+        // nowhere the drain below can see: PendingRequestRegistry is still
+        // empty for them. Without it, a SIGTERM arriving just after a burst
+        // was written found count() === 0, skipped draining entirely, and
+        // dropped every one of those requests silently. One non-blocking
+        // pass over every ready fd is enough, and it can't block shutdown:
+        // it reads what is already there and returns.
+        //
+        // The cutoff is here on purpose. A request written after this pass
+        // is one that arrived after we began shutting down, and it gets the
+        // connection closing under it - the same answer any server gives
+        // for "you were too late".
+        $this->loop->tick(0.0);
+
         $deadline = $this->clock->now() + $this->gracefulShutdownTimeoutSeconds;
 
         while ($this->pendingRequests->count() > 0 && $this->clock->now() < $deadline) {
