@@ -129,7 +129,14 @@ final class WorkerPoolClientTest extends TestCase
     /**
      * $params may be a request DTO instead of an array - its JSON-visible
      * state becomes the params payload, so a caller can keep its call sites
-     * typed without knowing anything about how the worker deserializes them.
+     * typed.
+     *
+     * Deliberately a DTO local to this test rather than one from
+     * App\Contract: what's under test is the SDK turning ANY object into
+     * params, and a transport-level test shouldn't reach up into the
+     * application layer to prove it. Real callers in this codebase do share
+     * the contract class - see bin/client.php - and MasterEndToEndTest
+     * covers that path against the real server.
      */
     public function testCallAcceptsAnObjectAsParams(): void
     {

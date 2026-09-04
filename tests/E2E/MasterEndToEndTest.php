@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\E2E;
 
+use App\Contract\Calculate\CalculateRequest;
 use App\Protocol\Request;
 use App\Sdk\ConnectionFailedException;
 use App\Sdk\WorkerPoolClient;
@@ -37,12 +38,12 @@ final class MasterEndToEndTest extends TestCase
             $response = $this->callOnceServerIsUp($client);
             $this->assertSame(['result' => 30], $response);
 
-            // The same call with a caller-side DTO instead of an array: the
-            // object's public state becomes the params payload, which the
-            // real server hydrates into its own CalculateRequest.
+            // The same call with the contract DTO instead of an array -
+            // the exact class the real server hydrates on its side, so this
+            // covers the typed path end to end.
             $this->assertSame(
                 ['result' => 7],
-                $client->call(new Request('calculate', new E2EOperands(3, 4)))
+                $client->call(new Request('calculate', new CalculateRequest(3, 4)))
             );
 
             proc_terminate($process, SIGTERM);
@@ -103,15 +104,5 @@ final class MasterEndToEndTest extends TestCase
         }
 
         return false;
-    }
-}
-
-/** A caller-side request DTO: only its wire shape ({a, b}) is shared with the server. */
-final readonly class E2EOperands
-{
-    public function __construct(
-        public int $a,
-        public int $b,
-    ) {
     }
 }
