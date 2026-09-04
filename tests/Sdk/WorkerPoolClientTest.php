@@ -125,6 +125,30 @@ final class WorkerPoolClientTest extends TestCase
         }
     }
 
+    /**
+     * $params may be a request DTO instead of an array - its JSON-visible
+     * state becomes the params payload, so a caller can keep its call sites
+     * typed without knowing anything about how the worker deserializes them.
+     */
+    public function testCallAcceptsAnObjectAsParams(): void
+    {
+        $pid = $this->forkServer(function (Socket $socket, Message $request): void {
+            // Echo the request payload back so the parent can assert on the
+            // exact wire shape the object produced.
+            $socket->write(new Message(MessageType::RESPONSE, $request->id, $request->payload));
+        });
+
+        $client = new WorkerPoolClient($this->path);
+        $response = $client->call('calculate', new Operands(10, 20));
+
+        $this->assertSame([
+            'action' => 'calculate',
+            'params' => ['a' => 10, 'b' => 20],
+        ], $response);
+
+        pcntl_waitpid($pid, $status);
+    }
+
     public function testConnectionFailureThrowsConnectionFailedException(): void
     {
         $client = new WorkerPoolClient('/tmp/worker-pool-client-test-nothing-listening-here.sock');
@@ -154,5 +178,15 @@ final class WorkerPoolClientTest extends TestCase
             posix_kill($pid, SIGKILL);
             pcntl_waitpid($pid, $status);
         }
+    }
+}
+
+/** A caller-side request DTO for the object-params test above. */
+final readonly class Operands
+{
+    public function __construct(
+        public int $a,
+        public int $b,
+    ) {
     }
 }

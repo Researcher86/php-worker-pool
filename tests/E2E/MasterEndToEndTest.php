@@ -36,6 +36,14 @@ final class MasterEndToEndTest extends TestCase
             $response = $this->callOnceServerIsUp($client);
             $this->assertSame(['result' => 30], $response);
 
+            // The same call with a caller-side DTO instead of an array: the
+            // object's public state becomes the params payload, which the
+            // real server hydrates into its own CalculateRequest.
+            $this->assertSame(
+                ['result' => 7],
+                $client->call('calculate', new E2EOperands(3, 4))
+            );
+
             proc_terminate($process, SIGTERM);
 
             $this->assertTrue($this->waitForExit($process, 15.0), 'server did not exit after SIGTERM');
@@ -94,5 +102,15 @@ final class MasterEndToEndTest extends TestCase
         }
 
         return false;
+    }
+}
+
+/** A caller-side request DTO: only its wire shape ({a, b}) is shared with the server. */
+final readonly class E2EOperands
+{
+    public function __construct(
+        public int $a,
+        public int $b,
+    ) {
     }
 }

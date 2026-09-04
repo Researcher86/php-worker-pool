@@ -9,6 +9,7 @@ use App\IPC\Socket;
 use App\Protocol\MalformedMessageException;
 use App\Protocol\Message;
 use App\Protocol\MessageType;
+use App\Protocol\Payload;
 
 /**
  * Minimal synchronous client for talking to a running Master over its Unix
@@ -30,7 +31,18 @@ final readonly class WorkerPoolClient
     }
 
     /**
-     * @param array<string, mixed> $params
+     * $params may be a plain array or a request DTO - an object contributes
+     * its JSON-visible state (see Protocol\Payload), so the call site can
+     * stay typed:
+     *
+     *     $client->call('calculate', new Operands(a: 10, b: 20));
+     *
+     * The DTO is the CALLER's own: nothing requires it to be the class the
+     * worker hydrates on the other side, only that the resulting keys match
+     * what that action expects - a mismatch comes back as
+     * ServerErrorException('invalid_payload').
+     *
+     * @param array<string, mixed>|object $params
      *
      * @return array<string, mixed> the response payload, i.e. whatever the
      *         worker's handler returned for this action
@@ -39,11 +51,11 @@ final readonly class WorkerPoolClient
      * @throws RequestTimedOutException   no response within $timeoutSeconds
      * @throws ServerErrorException       the server answered with an ERROR
      *                                    (overloaded, timed out server-side,
-     *                                    worker crashed, ...)
+     *                                    worker crashed, invalid payload, ...)
      * @throws ConnectionClosedException  the connection dropped mid-request
      * @throws MalformedMessageException  the response didn't parse
      */
-    public function call(string $action, array $params = []): array
+    public function call(string $action, array|object $params = []): array
     {
         $connection = $this->connect();
 
@@ -52,7 +64,7 @@ final readonly class WorkerPoolClient
 
             $connection->write(new Message(MessageType::REQUEST, $id, [
                 'action' => $action,
-                'params' => $params,
+                'params' => Payload::of($params),
             ]));
 
             $response = $this->awaitResponse($connection, $id);

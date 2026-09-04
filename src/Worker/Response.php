@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Worker;
 
+use App\Protocol\Payload;
+
 /**
  * The counterpart of Request: what an application handler answers with.
  *
@@ -36,15 +38,14 @@ final readonly class Response
 
     /**
      * A successful answer built from a result DTO (or an array, passed
-     * through). An object contributes its JSON-visible state - public
-     * properties, or whatever JsonSerializable returns - which is the same
-     * view the wire encoding would take of it anyway.
+     * through) - see Protocol\Payload for how an object becomes one, the
+     * same rule the SDK applies to a request DTO on the way in.
      *
      * @param array<string, mixed>|object $data
      */
     public static function of(array|object $data): self
     {
-        return new self(self::toPayload($data));
+        return new self(Payload::of($data));
     }
 
     /**
@@ -64,24 +65,4 @@ final readonly class Response
         return new self(['error' => $error] + $details, successful: false);
     }
 
-    /**
-     * @param array<string, mixed>|object $data
-     *
-     * @return array<string, mixed>
-     */
-    private static function toPayload(array|object $data): array
-    {
-        if (is_array($data)) {
-            return $data;
-        }
-
-        $decoded = json_decode(json_encode($data, JSON_THROW_ON_ERROR), true, 512, JSON_THROW_ON_ERROR);
-
-        if (!is_array($decoded)) {
-            throw new \RuntimeException(sprintf('%s does not expose any JSON-visible state to respond with', $data::class));
-        }
-
-        /** @var array<string, mixed> */
-        return $decoded;
-    }
 }

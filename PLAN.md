@@ -1949,6 +1949,16 @@ type and hands back something else hits PHP's parameter check inside
 `WorkerRunner`'s try - reported as `handler_failed`, worker still alive
 (verified live).
 
+**The SDK side takes a DTO too:** `WorkerPoolClient::call()` accepts
+`array|object` for its params, so a call site can stay typed end to end -
+`$client->call('calculate', new Operands(a: 10, b: 20))`. The object is the
+CALLER's own: the two processes share the wire shape, not a class (the
+server hydrates those same keys into its own `CalculateRequest`), and a
+mismatch comes back as `ServerErrorException('invalid_payload')` - verified
+live. The array→object rule now lives once, in `Protocol\\Payload::of()`,
+used by both ends that must agree on it: the SDK on the way out and
+`Worker\\Response::of()` on the way back.
+
 Covered by `PayloadHydratorTest` (hydration rules, the envelope, rejections)
 and `PersistentWorkerTest` (`testPerActionDtoIsHydratedFromParamsAndABadPayloadIsRejected`,
 `testHandlerReturnedErrorResponseBecomesAnErrorMessage`,
@@ -2145,6 +2155,7 @@ src/
 │   ├── MessageType.php
 │   ├── MessageEncoder.php
 │   ├── MessageDecoder.php
+│   ├── Payload.php
 │   └── MalformedMessageException.php
 │
 ├── IPC/
