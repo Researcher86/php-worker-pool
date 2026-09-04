@@ -4,7 +4,7 @@ One request, followed from the calling process all the way to a worker and
 back, with what actually happens at every hop. Everything below is the code
 as it stands - class and method names are real, and so are the constants.
 
-Companion to [PLAN.md](../PLAN.md), which explains *why* each mechanism
+Companion to [PHASES.md](PHASES.md), which explains *why* each mechanism
 exists phase by phase. This document is the *how*, end to end, in one pass.
 
 ---

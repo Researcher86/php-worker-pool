@@ -9,11 +9,11 @@ use App\Support\Clock;
 use App\Support\SystemClock;
 
 /**
- * PLAN.md Phase 20: grows the pool when the queue has work waiting and no
+ * PHASES.md Phase 20: grows the pool when the queue has work waiting and no
  * worker is free to take it, shrinks it back down when there's idle
  * capacity to spare - bounded by [$minWorkers, $maxWorkers] either way.
  *
- * Uses the two signals PLAN.md's own example describes (queue growing / low
+ * Uses the two signals PHASES.md's own example describes (queue growing / low
  * load) via state already cheap to read: RequestQueue::size() and
  * WorkerPool's busy/idle counts (Phase 17). "Worker Utilization" and
  * "Request Latency" are listed there only as other *possible* signals, not

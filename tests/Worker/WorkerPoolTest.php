@@ -121,7 +121,7 @@ final class WorkerPoolTest extends TestCase
     }
 
     /**
-     * PLAN.md Phase 15: a worker can crash outright (not just drop its
+     * PHASES.md Phase 15: a worker can crash outright (not just drop its
      * connection while busy - see DispatcherTest for that case).
      * reapDeadWorkers() is what a SIGCHLD handler calls; it isn't tied to a
      * signal actually firing, so this drives it directly.
@@ -152,7 +152,7 @@ final class WorkerPoolTest extends TestCase
     }
 
     /**
-     * PLAN.md Phase 16's safety timeout: a worker that never reads the
+     * PHASES.md Phase 16's safety timeout: a worker that never reads the
      * SHUTDOWN message (stuck, or just too slow) must not hang shutdown
      * forever - stop() gives up on it and SIGKILLs it instead.
      */
@@ -175,7 +175,7 @@ final class WorkerPoolTest extends TestCase
         $this->assertFalse(posix_kill($stuckPid, 0));
     }
 
-    /** PLAN.md Phase 17: workers_idle / workers_busy / workers_dead (lifetime). */
+    /** PHASES.md Phase 17: workers_idle / workers_busy / workers_dead (lifetime). */
     public function testCountIdleAndCountBusyReflectWorkerState(): void
     {
         $launcher = new FakeWorkerLauncher();
@@ -219,7 +219,7 @@ final class WorkerPoolTest extends TestCase
     }
 
     /**
-     * PLAN.md Phase 19: reload() replaces every worker without dropping the
+     * PHASES.md Phase 19: reload() replaces every worker without dropping the
      * pool below its configured size or below its target once the old
      * generation is gone. All idle at reload time, so retiring finishes
      * immediately (still inside reload() itself).
@@ -317,7 +317,7 @@ final class WorkerPoolTest extends TestCase
         $pool->stop();
     }
 
-    /** PLAN.md Phase 20. */
+    /** PHASES.md Phase 20. */
     public function testScaleUpAddsWorkers(): void
     {
         $launcher = new FakeWorkerLauncher();

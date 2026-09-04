@@ -22,7 +22,7 @@ final class RequestMetrics
 
     private int $failed = 0;
 
-    // PLAN.md Phase 17's two remaining metrics, plus the end-to-end figure
+    // PHASES.md Phase 17's two remaining metrics, plus the end-to-end figure
     // they add up to. Separate on purpose: a p99 of 10s means something very
     // different depending on whether it was spent queued or executing.
     public private(set) DurationStat $queueWait;

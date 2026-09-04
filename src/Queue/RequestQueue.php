@@ -13,7 +13,7 @@ use App\Protocol\Message;
  * mixed values, this holds only Message — giving callers a typed queue
  * without them having to know the underlying implementation is an SplQueue.
  *
- * $maxSize is the backpressure limit (PLAN.md Phase 13): with more workers
+ * $maxSize is the backpressure limit (PHASES.md Phase 13): with more workers
  * than the queue can ever hold requests for, an unbounded queue under
  * sustained overload just grows until the process runs out of memory.
  * Rejection itself happens one layer up, in Dispatcher::dispatch() — this

@@ -212,7 +212,7 @@ final class WorkerPoolClientTest extends TestCase
     }
 
     /**
-     * PLAN.md Phase 18's client half: send() puts a request on the wire and
+     * PHASES.md Phase 18's client half: send() puts a request on the wire and
      * returns immediately, so several can be in flight at once, and all()
      * collects them. The forked server here reads all three BEFORE answering
      * any, which only works because the client didn't block on the first.

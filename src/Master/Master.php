@@ -53,7 +53,7 @@ final class Master
     private mixed $signalWrite;
 
     /**
-     * Every default is the corresponding PLAN.md phase's own example value -
+     * Every default is the corresponding PHASES.md phase's own example value -
      * they're constructor parameters (rather than constants) so a deployment
      * or a test can run a Master on its own socket path and sizing without
      * editing this class.
@@ -66,15 +66,15 @@ final class Master
         // both the Master and PHP-FPM belong to) rather than to everyone.
         private readonly int $socketMode = 0600,
         private readonly ?string $socketGroup = null,
-        // PLAN.md Phase 20's bounds - the pool starts at the floor and grows
+        // PHASES.md Phase 20's bounds - the pool starts at the floor and grows
         // under load rather than starting pre-scaled.
         private readonly int $minWorkers = 2,
         private readonly int $maxWorkers = 16,
-        // PLAN.md Phase 13's limit - past this many requests waiting for a
+        // PHASES.md Phase 13's limit - past this many requests waiting for a
         // free worker, the queue would just grow unbounded under sustained
         // overload instead of applying backpressure.
         private readonly int $maxQueueSize = 10_000,
-        // PLAN.md Phase 14: how long a client waits for a response before
+        // PHASES.md Phase 14: how long a client waits for a response before
         // the Master gives up on its behalf and reports a timeout instead.
         private readonly float $requestTimeoutSeconds = 30.0,
         // A different limit from the one above, for a different problem.
@@ -84,7 +84,7 @@ final class Master
         // timeout on purpose - when this fires, the request isn't late, it's
         // never finishing, so the worker is killed and replaced.
         private readonly float $workerExecutionTimeoutSeconds = 60.0,
-        // PLAN.md Phase 16's safety timeout: once a shutdown signal arrives,
+        // PHASES.md Phase 16's safety timeout: once a shutdown signal arrives,
         // queued and in-flight requests get this long, total, to finish
         // before the Master gives up on whoever's left and force-stops the
         // workers.
@@ -180,7 +180,7 @@ final class Master
         } finally {
             // Whatever's left of the same overall shutdown budget also
             // bounds waiting for workers to actually exit - the timeout is
-            // one end-to-end allowance (PLAN.md: SIGTERM -> ... -> SIGKILL
+            // one end-to-end allowance (PHASES.md: SIGTERM -> ... -> SIGKILL
             // after gracefulShutdownTimeout), not 30s of draining plus a
             // separate window on top of it.
             $this->pool->stop(max(0.0, $remaining));
@@ -233,18 +233,18 @@ final class Master
         pcntl_signal(SIGINT, $this->stop(...));
         pcntl_signal(SIGTERM, $this->stop(...));
 
-        // PLAN.md Phase 15 - 'C': a worker can die on its own (crash,
+        // PHASES.md Phase 15 - 'C': a worker can die on its own (crash,
         // OOM-kill, ...) without ever touching its socket; an idle one is
         // invisible to Dispatcher's read-based detection (it only watches
         // busy workers). SIGCHLD catches it either way -> reapCrashedWorkers().
         pcntl_signal(SIGCHLD, fn () => @fwrite($this->signalWrite, 'C'));
 
-        // PLAN.md Phase 19 - 'H': replace every worker with a fresh one
+        // PHASES.md Phase 19 - 'H': replace every worker with a fresh one
         // without dropping a client connection or in-flight request - SIGHUP
         // is the traditional Unix "reload" signal (nginx, php-fpm).
         pcntl_signal(SIGHUP, fn () => @fwrite($this->signalWrite, 'H'));
 
-        // PLAN.md Phase 17 - 'U': dump the current Metrics snapshot to
+        // PHASES.md Phase 17 - 'U': dump the current Metrics snapshot to
         // stdout on demand - `kill -USR1 <pid>` is the usual Unix convention
         // for "report your stats now" (nginx and php-fpm again), and needs
         // no new wire protocol or endpoint.
@@ -278,7 +278,7 @@ final class Master
     }
 
     /**
-     * PLAN.md Phase 15: reap every worker that has exited and fail the
+     * PHASES.md Phase 15: reap every worker that has exited and fail the
      * request each crashed one was holding, so its client hears
      * worker_crashed now instead of waiting out the request timeout. Runs in
      * main-loop context (via the self-pipe), so writing to clients from here
@@ -352,7 +352,7 @@ final class Master
 
         // A RESPONSE is a real worker reply; anything else here is the
         // worker_crashed error Dispatcher synthesizes when the worker died
-        // mid-request (PLAN.md Phase 15).
+        // mid-request (PHASES.md Phase 15).
         $response->type === MessageType::RESPONSE
             ? $this->requestMetrics->recordCompleted()
             : $this->requestMetrics->recordFailed();
@@ -389,7 +389,7 @@ final class Master
     }
 
     /**
-     * PLAN.md Phase 16: on a shutdown signal, stop taking new connections
+     * PHASES.md Phase 16: on a shutdown signal, stop taking new connections
      * immediately, then give queued/in-flight requests a bounded window to
      * actually finish (normal traffic keeps flowing through the same loop
      * the whole time - workers and already-connected clients don't know

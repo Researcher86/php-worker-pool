@@ -87,7 +87,7 @@ final class ClientRegistryTest extends TestCase
     }
 
     /**
-     * PLAN.md Phase 11's PendingRequestRegistry needs to know when a client
+     * PHASES.md Phase 11's PendingRequestRegistry needs to know when a client
      * it's tracking requests for is gone, so it can drop those entries
      * instead of waiting out their timeout for nothing - onDisconnect is
      * the hook Master wires that through. Covers both ways a client gets
@@ -179,7 +179,7 @@ final class ClientRegistryTest extends TestCase
     }
 
     /**
-     * PLAN.md Phase 18's Definition of Done: one connection can have
+     * PHASES.md Phase 18's Definition of Done: one connection can have
      * multiple pending requests at once. This isn't new machinery - the
      * handler already reads and decodes everything readAvailable() returns
      * in one pass, invoking onRequest once per message - this just proves
@@ -214,7 +214,7 @@ final class ClientRegistryTest extends TestCase
     }
 
     /**
-     * The other half of PLAN.md Phase 18's Definition of Done: responses to
+     * The other half of PHASES.md Phase 18's Definition of Done: responses to
      * concurrent requests on one connection "may arrive" out of order
      * (the plan's own example: #2, #1, #3), and each must still reach the
      * client under its own original id - reusing the full Master-style

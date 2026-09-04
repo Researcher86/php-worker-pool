@@ -66,7 +66,7 @@ final class ClientConnectionTest extends TestCase
 
     /**
      * The write buffer is the outbound counterpart of the request queue's
-     * maxSize (PLAN.md Phase 13): a stuck client that never reads must not
+     * maxSize (PHASES.md Phase 13): a stuck client that never reads must not
      * grow the Master's memory without bound. Past the cap the client is
      * declared dead and its buffer dropped - never retained.
      */

@@ -1,0 +1,714 @@
+# Decisions
+
+Why this codebase is the way it is: what was tried, what was rejected, and
+which bugs forced a design to change.
+
+The code says what it does and its comments say why each line is there;
+this is the layer above that - the decisions that shaped whole components,
+the alternatives that were considered and dropped, and the failures that
+were only found by running the thing. It is the least reconstructible
+knowledge in the repository, which is why it is written down.
+
+For how the system was built step by step, see [PHASES.md](PHASES.md). For
+how a request flows through it today, see
+[REQUEST-LIFECYCLE.md](REQUEST-LIFECYCLE.md).
+
+## Contents
+
+- [Hardening the edges: peers, signals and races](#hardening-the-edges-peers-signals-and-races)
+- [Simplification: one execution model, not two](#simplification-one-execution-model-not-two)
+- [Business logic moved out of the runtime](#business-logic-moved-out-of-the-runtime)
+- [Client-side multiplexing](#client-side-multiplexing)
+- [Worker recycling, benchmarks, onboarding](#worker-recycling-benchmarks-onboarding)
+- [Execution timeout, and testing the signal races](#execution-timeout-and-testing-the-signal-races)
+- [Failure semantics and invariant tests](#failure-semantics-and-invariant-tests)
+- [Latency breakdown](#latency-breakdown)
+- [Socket permissions](#socket-permissions)
+- [Zombie processes after the test suite](#zombie-processes-after-the-test-suite)
+- [Where the code ended up, and why](#where-the-code-ended-up-and-why)
+
+---
+
+# Hardening the edges: peers, signals and races
+
+A full-project review, once the twenty phases in [PHASES.md](PHASES.md) were
+all done, found no bugs in any
+single phase's happy path - what it found was in the seams: signal handling
+across fork(), framing after a failed write, and the two places where one
+misbehaving peer could still take down or stall the whole single-threaded
+Master. All fixed:
+
+- **A worker's malformed bytes crashed the Master.** `Dispatcher::watch()`
+  caught only `ConnectionClosedException`; `MalformedMessageException` from
+  a desynced worker stream propagated through `EventLoop::tick()` straight
+  out of Master's main loop. Both are now treated as a worker crash (the
+  in-flight request fails with `worker_crashed`, the socket is closed so a
+  still-running desynced worker exits and gets replaced via SIGCHLD).
+  Covered by `DispatcherTest::testMalformedBytesFromAWorkerAreTreatedAsACrashNotAMasterCrash`.
+
+- **A given-up write desynced the stream instead of ending it.**
+  `Socket::write()` hitting `writeTimeoutSeconds` mid-frame returned
+  silently, leaving the connection open with half a frame sent - the next
+  write would be parsed by the peer as the rest of that frame. The socket
+  now marks itself broken (all later writes dropped) and shuts down its
+  sending side, so the peer sees clean EOF instead of garbage. Covered by
+  `SocketTest::testAGivenUpWriteBreaksTheSocketInsteadOfDesyncingTheStream`.
+
+- **One slow client could stall the Master for up to 5s per frame.** Client
+  writes went through `Socket::write()`'s bounded-blocking retry - fine for
+  workers and the SDK, wrong inside the single-threaded Master.
+  `ClientConnection` now buffers writes and flushes them on EventLoop
+  writability events (`EventLoop` gained `addWritable`/`removeWritable`),
+  never blocking; a stuck client's buffer is capped (4 MiB) rather than
+  growing without bound, and `Master::shutdown()` drains remaining client
+  buffers within the same shutdown budget before exiting. Covered by
+  `ClientConnectionTest` and `EventLoopTest::testTickInvokesWritableHandlerUntilRemoved`.
+
+- **Forked workers inherited Master's signal handlers and mask.** A worker
+  forked after Master registered its handlers (a crash replacement, a
+  scale-up) carried closures over Master state: SIGHUP delivered to it would
+  run `reload()` *inside the worker* and fork grandchildren. The child now
+  resets every handler Master registers to `SIG_DFL` and clears the
+  inherited signal mask before entering the worker loop
+  (`ForkedWorkerLauncher`).
+
+- **Async SIGCHLD could interleave with WorkerPool's own mutations.** With
+  `pcntl_async_signals(true)`, `reapDeadWorkers()` could fire between any
+  two statements of `stop()`/`reload()`/`scaleUp()`/`scaleDown()`/
+  `retireIdleWorkers()`, and `stop()`'s `waitpid()` loop competed with the
+  handler's for the same child exits. Each mutating operation now runs with
+  SIGCHLD delivery deferred (`pcntl_sigprocmask`; blocked, not ignored -
+  delivered the moment the operation ends), making it atomic with respect
+  to the reaper. Three narrower windows of the same class, also closed:
+  Master's SIGCHLD handler no longer writes to clients from signal context
+  (it could reenter an unfinished buffered write on the same connection) -
+  it only reaps and records, and the main loop delivers the worker_crashed
+  errors; `WorkerPool::write()` re-checks the worker atomically and returns
+  null if it was reaped between `getAvailable()` and the dispatch
+  (`Dispatcher::pump()` requeues and picks another); and
+  `WorkerProcess::finishRequest()` tolerates a worker the reaper marked
+  DEAD a moment earlier instead of throwing from the timing window.
+
+- **Autoscaler scaled the fresh generation away right after a reload.**
+  Found by this pass's live SIGHUP run (unit tests all green throughout):
+  right after reload() on an idle pool, `count()` briefly sees both
+  generations (new available + old STOPPING), so `Autoscaler::check()`
+  concluded "4 workers, floor is 2, queue empty" and called `scaleDown(2)` -
+  and since scaleDown() skips already-retiring workers, the only candidates
+  were the NEW generation. Deterministic: an idle pool's reload always ended
+  at zero workers. Scaling decisions now use the new
+  `WorkerPool::countActive()` (workers that are staying - not retiring, not
+  STOPPING, not DEAD) for the floor, keeping `count()` only for the
+  maxWorkers ceiling, which caps live processes on purpose. Covered by
+  `AutoscalerTest::testDoesNotScaleDownTheFreshGenerationDuringAReload` and
+  re-verified live (SIGHUP swaps the full generation, requests keep
+  answering, pool stays at size through the cooldown).
+
+- **A handler exception killed the whole worker.** `WorkerRunner` now
+  answers the request with `{"error":"handler_failed"}` and keeps serving -
+  a handler bug cost a reap-and-refork and a `worker_crashed` for something
+  an error reply answers just as well. Covered by `PersistentWorkerTest::
+  testHandlerFailureAnswersWithAnErrorAndTheWorkerSurvives`.
+
+- **Recovered failures vanished without a trace.** The launch failures
+  WorkerPool deliberately survives (crash replacement, reload wave,
+  scale-up) were empty `catch` blocks - no exception, no metric, no record.
+  A minimal `Support/Logger` (one method; `StderrLogger` in Master,
+  `NullLogger` default) now records them. Deliberately not PSR-3: this
+  codebase has no dependencies, and these sites need "record that this
+  happened", nothing more.
+
+- **Master's config was hardcoded; nothing tested it end to end.** Socket
+  path, worker bounds, queue size, and timeouts are now constructor
+  parameters (defaults unchanged - still each phase's own example values),
+  `bin/server.php` honors `WORKER_POOL_SOCKET`, and a new
+  `MasterEndToEndTest` boots the real `bin/server.php`, round-trips a real
+  request through the SDK, SIGTERMs it, and asserts clean exit plus socket
+  file removal. A GitHub Actions workflow runs the suite and PHPStan on
+  every push.
+
+---
+
+# Simplification: one execution model, not two
+
+A follow-up pass with two goals: remove complexity that wasn't earning its
+keep, and close the remaining architectural gaps the third pass had only
+mitigated pointwise. One more latent bug fell out of the simplification
+itself:
+
+- **Queued requests could strand after a burst.** Exposed by rewriting the
+  batch-API tests onto the event-driven path (they immediately failed): the
+  event path pumped the queue only when a NEW request arrived - a worker
+  answering never triggered a dispatch, so a burst followed by silence left
+  the queue's tail sitting until request timeout. This is PHASES.md Phase 7's
+  own "Worker Response -> dispatch()" event, which the batch API implemented
+  (in waitForActivity()) but the event path never did - and Master had used
+  the event path since Phase 11, masked by continuous traffic re-pumping the
+  queue. Dispatcher now pumps immediately when a worker finishes a request,
+  and Master calls the new `Dispatcher::dispatchQueued()` once per tick for
+  capacity the Dispatcher can't observe appearing (a crash replacement, a
+  scale-up, a reload's fresh generation). The rewritten
+  `DispatcherTest::testProcessesMoreRequestsThanWorkersThroughTheQueue`
+  (burst of 6 into 2 workers, then ticks only) is the regression test;
+  verified live with 12 parallel clients against 2 workers - 12/12 answered.
+
+- **The synchronous batch API is gone.** `Dispatcher::run()` /
+  `waitForActivity()` / `UnresolvedRequestsException` /
+  `RequestQueue::hasCapacityFor()` were used by nothing but tests - Master
+  has been dispatch()+onResponse since Phase 11. One execution model to
+  reason about instead of two; the tests that used run() now exercise the
+  same scenarios through the event path (which is how the starvation bug
+  above surfaced).
+
+- **The SDK no longer returns server errors as results.**
+  `WorkerPoolClient::call()` used to hand back an ERROR payload as if the
+  request had succeeded - every caller was responsible for remembering to
+  check for an 'error' key. It now throws `Sdk\ServerErrorException`
+  (carrying the machine-readable code - server_overloaded, request_timeout,
+  worker_crashed, handler_failed, server_shutting_down - and the full
+  payload).
+
+- **Master restructured: self-pipe for signals, properties over closures,
+  Clock injected.** SIGCHLD/SIGHUP/SIGUSR1 handlers now write one
+  identifying byte to a self-pipe registered with the same EventLoop; the
+  actual work (reap-and-fail, reload, metrics dump) runs from
+  drainSignalPipe() in ordinary main-loop context on the very next tick.
+  This eliminates the async-signal-reentrancy class of problems structurally
+  rather than pointwise: no more forking a new generation from inside signal
+  context, no more third-pass lost-request queue (reaping now happens where
+  writing to clients is safe, so it just does both). WorkerPool's own
+  sigprocmask deferral stays as defense-in-depth for standalone use. The
+  wiring itself moved from one long run() with a web of use() closures to
+  properties plus named private handlers (handleClientRequest,
+  routeResponse, reapCrashedWorkers, ...), and Master takes a Clock like
+  the other time-dependent components.
+
+---
+
+# Business logic moved out of the runtime
+
+`WorkerRunner` no longer hardcodes what requests DO. The `calculate` route
+(added back in Phase 12) lived inside the runtime; it now lives in
+`bin/server.php`, passed into `Master` as an application handler that
+`ForkedWorkerLauncher` hands each forked worker (fork() copies parent
+memory, so it reaches replacements and scale-ups forked long after startup
+too).
+
+**The handler contract is fixed: `Request in, Response out`.** No signature
+reflection, no alternative shapes - the runtime hydrates every request
+payload into the `Request` envelope (`action` + `params`, what
+`WorkerPoolClient::call()` sends) before the call, and the handler answers
+with a `Response`:
+
+```php
+$handler = static function (Request $request): Response {
+    return match ($request->action) {
+        'calculate' => Response::of(calculate(PayloadHydrator::hydrate(CalculateRequest::class, $request->params))),
+        default => Response::error('unknown_action'),
+    };
+};
+```
+
+An earlier iteration let the handler declare whatever parameter type it
+liked and had a `HandlerAdapter` reflect the signature at worker startup to
+decide what to pass (raw array vs. hydrated DTO) and how to interpret what
+came back (array, DTO, or Response). It worked, but it meant the runtime's
+central contract could only be understood by reading the reflection rules -
+three input shapes and three output shapes, all implicit. One fixed
+signature says the same thing in the type declaration itself, and
+`HandlerAdapter` collapsed into `PayloadHydrator`, which now does exactly
+one thing.
+
+**`PayloadHydrator`** builds a DTO from a payload array via its
+constructor: payload keys matched to parameter names, extra keys ignored,
+absent optional parameters falling back to defaults, class-typed parameters
+hydrated recursively from nested arrays. It runs twice per request in the
+routing pattern above - once by `WorkerRunner` for the envelope, once by the
+handler for the matched action's own DTO - so each action stays an ordinary
+typed function (`calculate(CalculateRequest): CalculateResult`). A payload
+that doesn't fit throws `PayloadHydrationException`, answered as
+`invalid_payload`, classified by exception type rather than by where it was
+thrown - so an envelope mismatch and an action-DTO mismatch look the same to
+a client, and both stay distinct from `handler_failed` (the handler itself
+throwing).
+
+**`Worker\Response`** is the outbound counterpart. `Response::of($dto)`
+turns a result DTO's JSON-visible state into the response payload;
+`new Response([...])` takes a payload directly; `Response::error('unknown_action')`
+answers with an ERROR message carrying a code the application chose, which
+`WorkerPoolClient` turns back into a `ServerErrorException` whose `->error`
+is that same code - previously a handler could only fail by throwing, which
+reports `handler_failed` and says nothing about what was wrong.
+`$successful` is a bool rather than a `MessageType`: application code
+shouldn't need the wire protocol's vocabulary, and `WorkerRunner` stays the
+single place that turns a Response into a message, always under the
+request's own correlation id, so a handler can't break routing. Its own
+failure replies go through the same type. A handler that skips its return
+type and hands back something else hits PHP's parameter check inside
+`WorkerRunner`'s try - reported as `handler_failed`, worker still alive
+(verified live).
+
+**The SDK side takes a DTO too:** `WorkerPoolClient::call()` accepts
+`array|object` for its params, so a call site can stay typed end to end -
+`$client->call('calculate', new Operands(a: 10, b: 20))`. The object is the
+CALLER's own: the two processes share the wire shape, not a class (the
+server hydrates those same keys into its own `CalculateRequest`), and a
+mismatch comes back as `ServerErrorException('invalid_payload')` - verified
+live. The array→object rule now lives once, in `Protocol\\Payload::of()`,
+used by both ends that must agree on it: the SDK on the way out and
+`Worker\\Response::of()` on the way back.
+
+Covered by `PayloadHydratorTest` (hydration rules, the envelope, rejections)
+and `PersistentWorkerTest` (`testPerActionDtoIsHydratedFromParamsAndABadPayloadIsRejected`,
+`testHandlerReturnedErrorResponseBecomesAnErrorMessage`,
+`testHandlerFailureAnswersWithAnErrorAndTheWorkerSurvives`).
+
+---
+
+# Client-side multiplexing
+
+Phase 18 gave the Master multiplexing and left the client synchronous. The
+client half exists now, over one connection opened on first use and reused:
+
+```php
+$a = $client->send(new Request('calculate', new CalculateRequest(a: 10, b: 20)));
+$b = $client->send(new Request('calculate', new CalculateRequest(a: 30, b: 40)));
+$c = $client->send(new Request('calculate', new CalculateRequest(a: 50, b: 60)));
+
+[$first, $second, $third] = $client->all($a, $b, $c);
+```
+
+`send()` writes the request and returns a `PendingResponse` handle
+immediately; `await()` (on the handle or the client) and `all()` are where
+this process blocks. `call()` is now just send-then-await, so the
+single-request path is unchanged for callers.
+
+Nothing runs in the background and no callback ever fires - the handle is a
+claim ticket, not a promise. What it buys is overlap: with `call()` the pool
+starts request N+1 only after this process has read answer N. Measured
+against a real server with three workers and a handler sleeping 0.5s:
+**0.51s for three sends collected together, 1.50s for the same three
+call()s** - the difference the Master's multiplexing was always capable of
+and the client couldn't use.
+
+Details worth knowing:
+- Answers are matched by correlation id and buffered, so they may arrive in
+  any order; `all()` returns payloads in the order the handles were passed.
+- Each request's timeout runs from when IT was sent, not from when it is
+  awaited. A late answer to a request already timed out is discarded, not
+  mistaken for another's.
+- One failure among several surfaces only on its own handle
+  (`ServerErrorException`); the others are unaffected. `all()` throws on the
+  first failure, since whoever asked for all of them asked for all to
+  succeed - await individually when partial results are worth having.
+- A handle is one-shot: collecting it twice throws `LogicException` rather
+  than blocking forever.
+- A dropped connection clears everything in flight (nothing pending could
+  ever arrive) and the next `send()` reconnects.
+
+Covered by `WorkerPoolClientTest` (a forked server that reads every request
+before answering any - only possible if the client didn't block on the
+first - plus out-of-order collection, error isolation, and double-await) and
+`MasterEndToEndTest` against the real server.
+
+---
+
+# Worker recycling, benchmarks, onboarding
+
+Work driven by an outside review of the finished project. Three of its
+points landed; one was already true but badly expressed; one needed a
+correction.
+
+**Worker recycling (new).** The review's strongest point, and it was right:
+for persistent PHP this isn't a nicety. RecyclingPolicy adds maxRequests,
+maxLifetime and maxMemoryBytes, on by default in Master. See the section
+above for the mechanism.
+
+**DRAINING (agreed, with a caveat).** The review asked for the state; the
+behaviour already existed for reload and scale-down, expressed as a
+parallel `retiringPids` map. Adding the state added no capability - it
+deleted that map and gave recycling the same mechanism for free, which is a
+better reason to do it than the one asked for.
+
+**Benchmarks (new).** See docs/BENCHMARKS.md. One correction to the review:
+wrk and k6 don't apply here - both speak HTTP, this speaks a length-prefixed
+protocol over a Unix socket - so the load generator is bin/bench.php,
+driving the pool through the project's own SDK.
+
+**Tests (partly already true).** The review's chaos list - worker dies
+mid-request, client disconnects mid-request, malformed frame, worker returns
+an invalid response - was already covered, each by name in DispatcherTest
+and ClientRegistryTest. What was genuinely missing was load, which
+bin/bench.php now provides. The suggested IdGenerator unit test has nothing
+to test: it was deliberately never built (see the Actual Structure note).
+
+**README (agreed).** It had grown to 1200 lines of concepts with no way in.
+It now opens with a 30-second demo, a usage example, a capability table and
+a documentation index, with the conceptual material kept below.
+
+**One thing the benchmarks found on their own:** the first 8-worker run
+took 59 seconds for work that took 0.9, with every individual request
+measuring 0.17ms - the processes were taking a minute to exit. The cause was
+this repository's own Dockerfile setting `xdebug.start_with_request=yes`,
+which makes every PHP process attempt a debugger connection; harmless for
+one process, a minute of teardown for eighteen. Now `trigger`. The test
+suite got 35% faster as a side effect.
+
+---
+
+# Execution timeout, and testing the signal races
+
+A second outside review, this time of the code rather than the README. Two
+of its points became work.
+
+**Two timeouts, not one.** Phase 14's request timeout is about the CLIENT:
+past its deadline the Master stops making someone wait and answers
+request_timeout. It says nothing about the worker, which keeps running - so
+a handler stuck in an infinite loop held its slot forever, costing the pool
+one worker permanently per stuck request. `workerExecutionTimeoutSeconds`
+(60s, deliberately above the 30s request timeout) is the pool-side limit:
+when it fires the request is not late, it is never finishing, so the worker
+gets SIGTERM (SIGKILL if it somehow survives to the next sweep) and SIGCHLD
+replaces it like any crash. Terminations are counted apart from crashes,
+because they mean different things - a crash is the worker failing, a
+termination is a request that never returned. A draining worker is exempt:
+it is already leaving and its request is finishing normally.
+
+Verified live: with a 2s request timeout and a 5s execution limit against a
+handler that loops forever, the client got request_timeout at 2.0s, the log
+recorded `terminating worker 1194: request "req-1" has run 5.0s (max 5.0s)`,
+the pool was back to full strength immediately, and the metrics read
+Terminated 1 / Crashed 0.
+
+**EventLoop's contract, made explicit.** `stream_select()` has three
+outcomes and the loop treated two of them the same: on EINTR it returns
+false and leaves the resource arrays UNCHANGED - every registered resource,
+not the ready ones - so handlers ran for events that never happened. It
+happened to be harmless (each handler no-ops on an empty read) but the
+contract was "a handler runs when its resource is ready OR when a signal
+arrived", which is not a contract anyone can reason about. Now the three
+outcomes are distinguished and only a positive count invokes handlers.
+
+**Tests for the windows async signals open.** `ReapRaceTest` drives the
+reaper at exactly the point SIGCHLD could land - between `getAvailable()`
+and `write()` - and asserts the dispatch refuses cleanly and the request is
+requeued rather than lost; it also covers the review's sharpest observation,
+that a worker marked DEAD but not yet reaped must count as neither capacity
+nor headroom. `ChaosTest` does the same for things only real processes can
+show: a 100-request burst all answered, a worker killed outright and
+replaced, SIGHUP swapping a generation with 20 requests in flight and none
+dropped, and SIGTERM answering everything it had accepted before removing
+the socket.
+
+**Not done, on purpose.** The review's other main point was that WorkerPool
+carries too many responsibilities - registry, supervisor, recycler, reload,
+scaling, shutdown - and it is right. It also said not to split it yet, and
+that is right too: 570 readable lines beat a constellation of managers. The
+boundary instead is a rule - no further lifecycle feature goes into
+WorkerPool without extracting one first.
+
+---
+
+# Failure semantics and invariant tests
+
+A third review, this one framed as a PR review with a Request-changes
+verdict and five must-fix items. Four became work; one was already done.
+
+**Already done: timeout vs cancellation.** Asked for a client deadline and a
+worker execution deadline as separate concepts, with SIGTERM -> grace ->
+SIGKILL -> reap -> replacement, and a test driving a handler into an
+infinite loop. That shipped in the previous pass - see
+[Execution timeout, and testing the signal races](#execution-timeout-and-testing-the-signal-races).
+
+**Delivery semantics, written down.** The review's sharpest point: a worker
+that dies AFTER running a handler but BEFORE its response is delivered is
+indistinguishable, from the Master's side, from one that died before running
+it at all. `worker_crashed` therefore means "may or may not have taken
+effect", and a retry on top of it can double-execute. That was true and
+undocumented, which is the dangerous combination.
+`docs/FAILURE-MODEL.md` now states it plainly, along with why the runtime
+deliberately offers no automatic retry.
+
+**Master failure model, written down.** Same document: the Master is a
+single point of failure holding the queue, the pending registry, worker
+state and client connections in memory only, and a crash is total loss of
+work in progress. Also documented there: global-FIFO scheduling with no
+fairness between clients (a real noisy-neighbour exposure), the two
+different write models and the 5s bound the IPC one can impose on the
+Master, and the absence of protocol versioning.
+
+**Lifecycle ownership.** The review asked who owns worker state transitions
+when the autoscaler, reload, recycling, the execution-timeout sweep and
+shutdown can all want one. The answer was already "WorkerPool, and every
+transition goes through WorkerProcess's guard under deferred SIGCHLD" - but
+it was implicit, which is not much better than not being true. It is now
+stated on the class, together with the reason the class stays whole:
+splitting supervision across a Recycler, a ReloadManager and a Scaler that
+each mutate shared worker state would recreate the races a single owner
+exists to prevent.
+
+**A formal transition matrix.** `WorkerProcess` had five hand-rolled guards;
+it now has one declarative table, and `apply()` is the only thing in the
+class that assigns a state. `StateTransitionMatrixTest` asserts all thirty
+cells, legal and illegal, and fails if a state is ever added without a row -
+which is the point of writing the machine down rather than scattering it.
+
+**Invariant tests.** `tests/E2E/InvariantsTest.php` asserts the six
+properties the review listed, against a real Master: one request per worker
+at a time, exactly one terminal outcome per accepted request, DEAD and
+DRAINING workers never receiving work, replacements never exceeding
+maxWorkers, and nothing outliving shutdown. Plus the combination test it
+asked for - a 120-request burst with a worker killed, a SIGHUP, ten clients
+vanishing mid-request and recycling churning underneath.
+
+## Two real bugs the invariant tests found
+
+Both are the kind that only combination testing surfaces, and neither was
+visible in any single-mechanism test.
+
+**Requests dropped silently on shutdown.** `Master::shutdown()` drained
+while `pendingRequests->count() > 0`. A request a client had already sent
+but the Master had not yet READ is not pending - it is bytes in a socket -
+so a SIGTERM arriving just after a burst found count() === 0, skipped
+draining entirely, and dropped every one of them without a word. Shutdown
+now takes one non-blocking pass over every ready fd first, so work already
+accepted is answered. Found by running the chaos suite fifty times: it
+failed once, on run 44.
+
+**Connection accept rate capped at one per tick.** `UnixSocketServer` took a
+single connection per readable event, so the server's connection rate was
+bounded by the event loop's iteration rate - and the default listen backlog
+overran at 34 concurrent connects, after which clients got a failed connect
+rather than a queued one. That is worst exactly where this project aims:
+PHP-FPM, where every request is a new connection. It now drains the accept
+queue (bounded at 64 per tick, so a connection flood cannot starve
+everything else) and asks for a backlog of 511. Measured before and after:
+34 of 200 connections succeeded, then 200 of 200.
+
+After both fixes the chaos and invariant suites ran fifty consecutive times
+with zero failures.
+
+---
+
+# Latency breakdown
+
+The last item left open by Phase 17, closed once a review made the case: a
+single request_duration cannot distinguish a saturated pool from a slow
+handler, and those have opposite fixes.
+
+`PendingRequest` now carries two timestamps - when the Master accepted the
+request, and when a worker actually picked it up. The second is stamped by
+the Dispatcher through a new `onDispatched` callback, since it is the only
+component that knows the moment a request stops waiting for capacity and
+starts being worked on. `Master::recordLatency()` turns the pair into three
+figures when the request completes:
+
+```text
+   accepted ──────── dispatched ──────── answered
+       │   queue wait     │   execution      │
+       └─────────────── end to end ──────────┘
+```
+
+Only requests that actually reached a worker are measured: one rejected or
+timed out while still queued has no execution time, and averaging a zero
+into it would flatter the numbers.
+
+`DurationStat` keeps count, mean and max rather than percentiles -
+deliberately, since percentiles need the samples retained and a long-running
+Master would then hold an ever-growing array of floats for a number nobody
+reads until something is wrong. Three scalars answer the operational
+question and cost nothing to carry; swapping in a histogram later changes
+that class and no caller.
+
+Demonstrated with the same 20ms handler and the same eight clients, varying
+only the pool size:
+
+```text
+   8 workers                      1 worker
+     Queue wait: avg   0.03ms       Queue wait: avg 139.72ms
+     Execution:  avg  21.50ms       Execution:  avg  20.94ms
+     Total:      avg  21.53ms       Total:      avg 160.66ms
+```
+
+The handler is identical in both. The breakdown says so; a single total
+would have read as "it got eight times slower" and pointed at the wrong
+thing entirely.
+
+---
+
+# Socket permissions
+
+A reader suggested two things: a configurable `max_tasks_per_worker`, and an
+explicit `socket_permissions` setting.
+
+The first already existed - `RecyclingPolicy(maxRequests:)`, on by default
+at 10 000, and it drains the worker rather than killing it, with the
+replacement launched first so capacity never dips. See
+[Worker recycling, benchmarks, onboarding](#worker-recycling-benchmarks-onboarding).
+
+The second was a real gap, and a security one. `stream_socket_server()`
+creates the socket honouring the umask - 0755 in this project's own
+container - so any local account could connect and submit work to every
+worker. There is no handshake and no identity in the protocol: file
+permissions are the entire access control story.
+
+`socketMode` now defaults to `0600` and `socketGroup` is available for the
+deployment shape that actually needs sharing (Master under its own account,
+PHP-FPM under www-data, one group between them - what php-fpm's
+listen.owner/listen.group/listen.mode exist for). The umask is lowered
+around the bind so the socket is never briefly world-connectable, then
+chmod'ed exactly, and a permission that cannot be applied aborts startup
+rather than being logged - a security setting that silently does not take
+effect is worse than none.
+
+---
+
+# Zombie processes after the test suite
+
+Reported symptom: zombies accumulating in the dev container. Measured: 23
+before a run, 45 after - about 22 per `composer test`, growing until the
+container is recreated. Attributed per file: ChaosTest +10, InvariantsTest
++12, WorkerPoolClientTest +1.
+
+Every one of them had PPID 1, and PID 1 in this container is the base
+image's interactive `php -a` (the service runs with `tty: true`), a process
+that never calls wait(). So anything orphaned inside the container stays a
+zombie for the container's lifetime.
+
+The tempting fix is `init: true` on the compose service, which gives it a
+real init that reaps. That was tried and rejected: it makes the symptom
+disappear without removing the cause, and the cause was two ordinary bugs in
+the tests - which matter on their own, since CI runs the suite with no
+container at all.
+
+**The end-to-end tests SIGKILLed the Master in teardown.** Killing the
+Master outright orphans every worker it forked: they exit on EOF, but their
+parent is gone and nobody waits for them. Teardown now sends SIGTERM, waits
+up to 5s for the Master to shut its own workers down, and escalates only if
+it has to (instrumented during the investigation: it never has to).
+
+**A reap sat after the call that throws.**
+`WorkerPoolClientTest::testAwaitingTheSameHandleTwiceThrows` called
+`pcntl_waitpid()` on the line following `$pending->await()`, which is
+unreachable - `expectException` means the test method ends at the throw.
+Forked servers are now recorded and reaped in `tearDown()`, which runs
+whether a test ends normally or by exception.
+
+With those two fixed and no init: a fresh container, three consecutive full
+runs, 0 zombies after each, 5 processes throughout.
+
+One measurement artifact worth recording, since it briefly looked like a
+third leak: counting zombies immediately after phpunit exits attributes a
+worker that dies a moment later to the NEXT file's window. That is what
+produced a phantom "InvariantsTest +4" - running that file alone, eight
+times, leaked nothing, and adding a one-second settle before counting made
+it disappear.
+
+---
+
+---
+
+# Where the code ended up, and why
+
+`EventLoop` and `Dispatcher` ended up as their own top-level namespaces
+rather than living under `Master/` - both are used and tested independently
+of it. `ClientRegistry`/`ClientConnection`/`PendingRequest(Registry)` stayed
+together under `Client/` instead of splitting into a separate `Request/`;
+nothing ever needed standalone `Request`/`Response` value objects beyond
+`Protocol\Message`. The PHP SDK client (`WorkerPoolClient`) lives under
+`Sdk/`, not `Client/`, since it's a consumer of the protocol from outside
+the Master process, not part of the Master's own client-handling. Each
+namespace holds its own exception types next to what throws them
+(`IPC\ConnectionClosedException`, `Protocol\MalformedMessageException`,
+`Sdk\ConnectionFailedException`, `Sdk\RequestTimedOutException`,
+`Sdk\ServerErrorException`) rather than a shared `Exceptions/` -
+`Dispatcher\UnresolvedRequestsException` existed while Dispatcher still had
+its synchronous batch API and left with it - see
+[Simplification: one execution model, not two](#simplification-one-execution-model-not-two).
+`Metrics/MetricsRegistry` became `Metrics/MetricsCollector` (plus
+`Metrics.php` and `RequestMetrics.php` for the snapshot value object and the
+counters it reads - Phase 17). `Support/IdGenerator` was never built - every
+id in this codebase is either a trivial incrementing counter
+(`PendingRequestRegistry`) or `uniqid()` (`WorkerPoolClient`), and neither
+had an actual problem (collisions, predictability, ...) that would justify
+the abstraction. `Support/Clock` was added after Phase 20, during a code
+review - see that phase's own note in [PHASES.md](PHASES.md).
+
+```text
+src/
+│
+├── Master/
+│   └── Master.php
+│
+├── EventLoop/
+│   └── EventLoop.php
+│
+├── Dispatcher/
+│   └── Dispatcher.php
+│
+├── Worker/
+│   ├── WorkerPool.php
+│   ├── WorkerProcess.php
+│   ├── WorkerRunner.php
+│   ├── WorkerState.php
+│   ├── WorkerCrash.php
+│   ├── WorkerLauncher.php
+│   ├── ForkedWorkerLauncher.php
+│   ├── Autoscaler.php
+│   ├── PayloadHydrator.php
+│   └── PayloadHydrationException.php
+│
+├── Protocol/
+│   ├── Message.php
+│   ├── MessageType.php
+│   ├── MessageEncoder.php
+│   ├── MessageDecoder.php
+│   ├── Payload.php
+│   ├── Request.php
+│   ├── Response.php
+│   └── MalformedMessageException.php
+│
+├── Contract/            # the application layer, not the runtime
+│   └── Calculate/
+│       ├── CalculateAction.php
+│       ├── CalculateRequest.php
+│       └── CalculateResult.php
+│
+├── IPC/
+│   ├── Socket.php
+│   ├── SocketPair.php
+│   └── ConnectionClosedException.php
+│
+├── Server/
+│   └── UnixSocketServer.php
+│
+├── Queue/
+│   └── RequestQueue.php
+│
+├── Client/
+│   ├── ClientConnection.php
+│   ├── ClientRegistry.php
+│   ├── PendingRequest.php
+│   └── PendingRequestRegistry.php
+│
+├── Sdk/
+│   ├── WorkerPoolClient.php
+│   ├── PendingResponse.php
+│   ├── ConnectionFailedException.php
+│   ├── RequestTimedOutException.php
+│   └── ServerErrorException.php
+│
+├── Metrics/
+│   ├── Metrics.php
+│   ├── MetricsCollector.php
+│   └── RequestMetrics.php
+│
+└── Support/
+    ├── Clock.php
+    ├── SystemClock.php
+    ├── Logger.php
+    ├── StderrLogger.php
+    └── NullLogger.php
+```
+
+---

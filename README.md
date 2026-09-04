@@ -173,7 +173,8 @@ Following a single request through all of them instead:
 | **[docs/REQUEST-LIFECYCLE.md](docs/REQUEST-LIFECYCLE.md)** | one request followed hop by hop, client to worker and back, with every failure path |
 | **[docs/FAILURE-MODEL.md](docs/FAILURE-MODEL.md)** | what breaks, what survives it, and what the runtime does *not* guarantee - read before trusting it with anything |
 | **[docs/BENCHMARKS.md](docs/BENCHMARKS.md)** | measured throughput and latency, where it scales and where it stops |
-| **[PLAN.md](PLAN.md)** | the 20 phases this was built in, and why each mechanism exists |
+| **[docs/DECISIONS.md](docs/DECISIONS.md)** | why the code is shaped this way: what was tried, what was rejected, which bugs forced a change |
+| **[docs/PHASES.md](docs/PHASES.md)** | how it was built - the 20 phases, each with what it had to achieve |
 | the rest of this file | the concepts, in depth |
 
 ---
@@ -957,9 +958,10 @@ php-worker-pool/
 │
 ├── tests/
 │
+├── docs/
+│
 ├── composer.json
-├── README.md
-└── PLAN.md
+└── README.md
 ```
 
 ---

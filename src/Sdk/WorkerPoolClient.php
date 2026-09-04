@@ -32,7 +32,7 @@ use App\Protocol\Request;
  * call() the pool works on request N+1 only after this process has read
  * answer N, while three sends have three workers busy at once.
  *
- * Multiplexing is the Master's model already (PLAN.md Phase 18): responses
+ * Multiplexing is the Master's model already (PHASES.md Phase 18): responses
  * carry the correlation id they were sent under and may come back in any
  * order, so this client reads whatever arrives, buffers answers nobody has
  * asked for yet, and hands each one to whoever is waiting for that id.

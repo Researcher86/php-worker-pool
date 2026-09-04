@@ -9,7 +9,7 @@ namespace App\Client;
  * response to a request the Master dispatched, what id that client used on
  * the wire (so the response can be sent back under that id, not whatever
  * internal id the Master dispatched it under), and by when it must have
- * been answered (PLAN.md Phase 14 - microtime(true) seconds, matching
+ * been answered (PHASES.md Phase 14 - microtime(true) seconds, matching
  * everywhere else in this codebase that measures elapsed time).
  *
  * Also carries the two timestamps a latency breakdown needs: when the

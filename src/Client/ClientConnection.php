@@ -21,7 +21,7 @@ use App\Protocol\MessageEncoder;
  * writability event to send more - the same tick() that drives all other
  * I/O flushes it, with no separate machinery.
  *
- * The read-side buffering PLAN.md's Phase 10 asks for is already provided by
+ * The read-side buffering PHASES.md's Phase 10 asks for is already provided by
  * Socket (its MessageDecoder buffers partial reads) — this class doesn't
  * need its own copy of that.
  */
@@ -31,7 +31,7 @@ final class ClientConnection
      * Cap on unsent bytes one client may accumulate (its responses plus any
      * error frames). A stuck client that never reads would otherwise grow
      * its buffer without bound - the same OOM-by-slow-consumer problem the
-     * request queue's maxSize guards against on the way in (PLAN.md Phase
+     * request queue's maxSize guards against on the way in (PHASES.md Phase
      * 13), just on the way out. Past it the client is treated as dead.
      */
     private const int MAX_WRITE_BUFFER_BYTES = 4 * 1024 * 1024;

@@ -11,7 +11,7 @@ use App\Worker\WorkerPool;
 use PHPUnit\Framework\TestCase;
 
 /**
- * The pool-side half of timeouts (PLAN.md's "optionally terminate Worker").
+ * The pool-side half of timeouts (PHASES.md's "optionally terminate Worker").
  * A request timeout answers the CLIENT; this answers the POOL - a handler
  * that never returns would otherwise hold its worker forever.
  */

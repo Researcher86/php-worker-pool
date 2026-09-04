@@ -18,7 +18,7 @@ use App\Protocol\Message;
  * either it disconnected (ConnectionClosedException) or it sent bytes that
  * don't parse as a message (MalformedMessageException, e.g. a framing
  * desync). Both are handled the same way: drop the client, don't crash the
- * Master (see PLAN.md Phase 10, "A disconnected client must not crash the
+ * Master (see PHASES.md Phase 10, "A disconnected client must not crash the
  * Master").
  */
 final class ClientRegistry

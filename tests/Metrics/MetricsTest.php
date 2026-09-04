@@ -10,7 +10,7 @@ use PHPUnit\Framework\TestCase;
 
 final class MetricsTest extends TestCase
 {
-    /** format() matches PLAN.md Phase 17's own "Example Output" shape exactly. */
+    /** format() matches PHASES.md Phase 17's own "Example Output" shape exactly. */
     public function testFormatMatchesThePlansExampleOutputShape(): void
     {
         $metrics = new Metrics(

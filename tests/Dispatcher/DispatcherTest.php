@@ -62,7 +62,7 @@ final class DispatcherTest extends TestCase
     }
 
     /**
-     * PLAN.md Phase 15 against a real forked worker: SIGKILL it while it
+     * PHASES.md Phase 15 against a real forked worker: SIGKILL it while it
      * holds a request - the event-driven path must synthesize worker_crashed
      * for that request (the fake-launcher variant further down covers the
      * same logic deterministically, with no processes or OS timing at all).
@@ -132,7 +132,7 @@ final class DispatcherTest extends TestCase
     }
 
     /**
-     * Backpressure (PLAN.md Phase 13): once the queue is at its configured
+     * Backpressure (PHASES.md Phase 13): once the queue is at its configured
      * limit, dispatch() rejects instead of growing it further. Master.php
      * uses the false return to send the client a server_overloaded error
      * instead of leaving it waiting for a response that will never come.
@@ -161,7 +161,7 @@ final class DispatcherTest extends TestCase
     }
 
     /**
-     * PLAN.md Phase 15's "fail active request", deterministically: no
+     * PHASES.md Phase 15's "fail active request", deterministically: no
      * pcntl_fork, no posix_kill, no OS-timing race - just closing the fake
      * worker's end of the pair. A worker dying mid-request must actively
      * synthesize a response instead of leaving the request pending forever

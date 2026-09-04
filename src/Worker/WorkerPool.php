@@ -30,7 +30,7 @@ use App\Support\SystemClock;
  * is one responsibility even when it has many triggers - splitting it into
  * a Recycler, a ReloadManager and a Scaler that each mutate shared worker
  * state would recreate exactly the races the single owner exists to
- * prevent. See PLAN.md for the boundary rule that keeps it from growing
+ * prevent. See PHASES.md for the boundary rule that keeps it from growing
  * further: a new lifecycle feature does not go in here without something
  * else coming out.
  */
@@ -44,7 +44,7 @@ final class WorkerPool
     // (stop() only tells the workers present when it started to shut down).
     private bool $accepting = true;
 
-    // PLAN.md Phase 17: how many workers have crashed over the pool's whole
+    // PHASES.md Phase 17: how many workers have crashed over the pool's whole
     // lifetime. A live count of currently-dead workers would be close to
     // meaningless here - reapDeadWorkers() removes and replaces each one
     // essentially immediately, so that number is almost always 0.
@@ -61,7 +61,7 @@ final class WorkerPool
     // finished.
     private int $totalTerminated = 0;
 
-    // PLAN.md Phase 19/20 interaction: outgoing pids from reload() still
+    // PHASES.md Phase 19/20 interaction: outgoing pids from reload() still
     // waiting for a replacement because launching one right away would push
     // the pool past $maxWorkers (relevant once Autoscaler can have grown it
     // close to that ceiling already). Drained by advanceReload() as headroom
@@ -287,7 +287,7 @@ final class WorkerPool
     }
 
     /**
-     * PLAN.md Phase 19: replaces the whole pool without ever going below
+     * PHASES.md Phase 19: replaces the whole pool without ever going below
      * its configured size or dropping a request in flight. Starts a full
      * new generation immediately - they're available for new dispatch right
      * away - and drains every worker that existed before this call:
@@ -528,7 +528,7 @@ final class WorkerPool
     }
 
     /**
-     * PLAN.md Phase 20: starts up to $count additional workers, immediately
+     * PHASES.md Phase 20: starts up to $count additional workers, immediately
      * available for dispatch. Called from Autoscaler::check(), in Master's
      * main loop rather than a signal handler - but a launch() failure
      * partway through (the same transient fork-under-resource-pressure
@@ -562,7 +562,7 @@ final class WorkerPool
     }
 
     /**
-     * PLAN.md Phase 20: retires up to $count currently-idle workers - never
+     * PHASES.md Phase 20: retires up to $count currently-idle workers - never
      * a busy one, this is routine downscaling under low load, not a reload,
      * so there's no reason to wait on anything. Reuses the same DRAINING
      * mechanism for a subset rather than the whole pool: drain, then let
@@ -597,7 +597,7 @@ final class WorkerPool
     }
 
     /**
-     * PLAN.md Phase 16's safety timeout: sends every worker SHUTDOWN, waits
+     * PHASES.md Phase 16's safety timeout: sends every worker SHUTDOWN, waits
      * up to $timeoutSeconds for them to actually exit, then SIGKILLs
      * whatever is still alive rather than blocking forever on a worker
      * that's stuck or simply never got the message. Callers that already
@@ -618,7 +618,7 @@ final class WorkerPool
         // our end of its socket. A worker already DEAD (its process is gone,
         // see Dispatcher/ConnectionClosedException) skips the shutdown
         // message — there's nothing left to send it to. One already
-        // STOPPING (retireIdleWorkers() got to it first - PLAN.md Phase 19)
+        // STOPPING (retireIdleWorkers() got to it first - PHASES.md Phase 19)
         // already had its socket written to and closed; touching it again
         // would write/close an already-closed resource. It still needs to
         // be waited for below either way, just without repeating that.

@@ -116,7 +116,7 @@ final class Dispatcher
 
                     ($this->onResponse)($message);
 
-                    // PLAN.md Phase 7's second dispatch event: "Worker
+                    // PHASES.md Phase 7's second dispatch event: "Worker
                     // Response -> dispatch()". The worker just went idle -
                     // hand it the next queued request immediately (this may
                     // re-register the very socket deregistered above, now
@@ -127,7 +127,7 @@ final class Dispatcher
                 }
             } catch (ConnectionClosedException | MalformedMessageException) {
                 // Either the worker process is gone (ConnectionClosed,
-                // PLAN.md Phase 15), or its stream produced bytes that don't
+                // PHASES.md Phase 15), or its stream produced bytes that don't
                 // parse (Malformed - a framing desync, which has no recovery).
                 // Both make the worker unusable, and letting Malformed
                 // propagate would take the whole Master down - nothing above

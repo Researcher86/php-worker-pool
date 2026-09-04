@@ -19,7 +19,7 @@ use App\Support\SystemClock;
  * sees this internal id - resolve() hands back its original one so the
  * response can go out under the id the client is actually expecting.
  *
- * Deliberately holds just id => (client, original id, deadline) - PLAN.md's
+ * Deliberately holds just id => (client, original id, deadline) - PHASES.md's
  * Phase 11 sketch also lists Worker per entry, but nothing so far needs it
  * (WorkerProcess already knows its own current request id). Add it when
  * something actually needs it, not before.
@@ -67,7 +67,7 @@ final class PendingRequestRegistry
     /**
      * Removes and returns every entry whose deadline is at or before $now,
      * counting each as a timeout. A plain scan over every pending entry -
-     * PLAN.md's own "Future Improvement" note for this phase says a timer
+     * PHASES.md's own "Future Improvement" note for this phase says a timer
      * heap belongs here eventually, once scanning stops being cheap enough.
      *
      * @return list<PendingRequest>
@@ -90,7 +90,7 @@ final class PendingRequestRegistry
 
     /**
      * Removes and returns every still-tracked entry, regardless of
-     * deadline. For graceful shutdown (PLAN.md Phase 16): whatever is left
+     * deadline. For graceful shutdown (PHASES.md Phase 16): whatever is left
      * once the drain window closes needs to be told the Master is going
      * away, not just silently abandoned.
      *

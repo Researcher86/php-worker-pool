@@ -6,7 +6,7 @@ namespace App\Metrics;
 
 /**
  * A point-in-time snapshot of the Worker Pool's observable state
- * (PLAN.md Phase 17). Deliberately doesn't cover the "Performance Metrics"
+ * (PHASES.md Phase 17). Deliberately doesn't cover the "Performance Metrics"
  * (request_duration, worker_processing_time) - both need timestamps this
  * codebase doesn't track anywhere yet (when a request was queued, when a
  * worker actually started on it), and nothing currently needs them enough
@@ -34,7 +34,7 @@ final readonly class Metrics
     ) {
     }
 
-    /** Matches PLAN.md Phase 17's own "Example Output" shape. */
+    /** Matches PHASES.md Phase 17's own "Example Output" shape. */
     public function format(): string
     {
         return sprintf(

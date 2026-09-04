@@ -52,7 +52,7 @@ happened.
 - Make the handler idempotent (an idempotency key the action checks) if you
   intend to retry, or accept at-most-once and don't retry.
 - The runtime deliberately does not offer an automatic retry, because it
-  cannot make that decision correctly for you. PLAN.md Phase 15 records the
+  cannot make that decision correctly for you. PHASES.md Phase 15 records the
   same reasoning.
 
 Exactly-once delivery is not achievable at this layer, by anyone. What
