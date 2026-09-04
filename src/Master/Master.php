@@ -20,6 +20,7 @@ use App\Support\Logger;
 use App\Support\StderrLogger;
 use App\Support\SystemClock;
 use App\Worker\Autoscaler;
+use App\Worker\ForkedWorkerLauncher;
 use App\Worker\WorkerPool;
 
 final class Master
@@ -75,12 +76,24 @@ final class Master
         private readonly float $gracefulShutdownTimeoutSeconds = 30.0,
         private readonly Logger $logger = new StderrLogger(),
         private readonly Clock $clock = new SystemClock(),
+        // The application's request handler, run inside each worker: payload
+        // of a REQUEST in, response payload out - a
+        // \Closure(array<string, mixed>): array<string, mixed>. This is
+        // where business logic enters the system - defined wherever the
+        // server is configured (bin/server.php), never inside the runtime.
+        // Null falls back to WorkerRunner's echo default.
+        private readonly ?\Closure $handler = null,
     ) {
     }
 
     public function run(): void
     {
-        $this->pool = new WorkerPool($this->minWorkers, maxWorkers: $this->maxWorkers, logger: $this->logger);
+        $this->pool = new WorkerPool(
+            $this->minWorkers,
+            new ForkedWorkerLauncher($this->handler),
+            maxWorkers: $this->maxWorkers,
+            logger: $this->logger,
+        );
         $this->loop = new EventLoop();
         $this->pendingRequests = new PendingRequestRegistry($this->clock);
         $this->requestMetrics = new RequestMetrics();

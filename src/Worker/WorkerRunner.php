@@ -9,11 +9,32 @@ use App\IPC\Socket;
 use App\Protocol\Message;
 use App\Protocol\MessageType;
 
+/**
+ * The loop a worker process runs for its whole life: read a request, hand
+ * its payload to the application handler, write the response back.
+ *
+ * What requests actually DO is not this class's business - it's the
+ * application's, injected as $handler (payload in, payload out) and defined
+ * where the server is configured (see bin/server.php). Everything protocol-
+ * shaped stays here on purpose: the response keeps the request's correlation
+ * id and the RESPONSE/ERROR envelope is applied by this class, so an
+ * application handler cannot break routing no matter what it returns or
+ * throws.
+ */
 final readonly class WorkerRunner
 {
+    /** @var \Closure(array<string, mixed>): array<string, mixed> */
+    private \Closure $handler;
+
+    /** @param \Closure(array<string, mixed>): array<string, mixed>|null $handler */
     public function __construct(
         private Socket $socket,
+        ?\Closure $handler = null,
     ) {
+        // Default: echo the payload back - the behavior the protocol-level
+        // tests rely on, and a sane placeholder until an application
+        // provides something real.
+        $this->handler = $handler ?? static fn (array $payload): array => $payload;
     }
 
     public function run(): void
@@ -54,14 +75,7 @@ final readonly class WorkerRunner
 
     private function handle(Message $request): Message
     {
-        return match ($request->payload['action'] ?? null) {
-            'calculate' => new Message(MessageType::RESPONSE, $request->id, [
-                'result' => $request->payload['params']['a'] + $request->payload['params']['b'],
-            ]),
-            // No action (or an unrecognized one) - keep the old echo-back
-            // behavior the rest of the test suite relies on.
-            default => new Message(MessageType::RESPONSE, $request->id, $request->payload),
-        };
+        return new Message(MessageType::RESPONSE, $request->id, ($this->handler)($request->payload));
     }
 
     private function sendResponse(Message $response): void

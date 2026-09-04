@@ -9,9 +9,21 @@ use App\IPC\SocketPair;
 /**
  * The real WorkerLauncher: forks an OS child process that runs the worker
  * loop forever.
+ *
+ * $handler is the application's request handler for WorkerRunner (payload
+ * in, payload out; null = WorkerRunner's echo default). fork() copies the
+ * parent's memory, so a closure defined at server-configuration level (see
+ * bin/server.php) reaches every worker - including replacements and
+ * scale-ups forked long after startup - without any serialization.
  */
 final class ForkedWorkerLauncher implements WorkerLauncher
 {
+    /** @param \Closure(array<string, mixed>): array<string, mixed>|null $handler */
+    public function __construct(
+        private readonly ?\Closure $handler = null,
+    ) {
+    }
+
     /**
      * pcntl_fork() runs this same function body in TWO processes at once and
      * tells them apart only by its return value: the parent gets the child's
@@ -55,7 +67,7 @@ final class ForkedWorkerLauncher implements WorkerLauncher
 
             $socketPair->closeMaster();
 
-            $runner = new WorkerRunner($socketPair->getWorkerSocket());
+            $runner = new WorkerRunner($socketPair->getWorkerSocket(), $this->handler);
             $runner->run();
 
             exit(0);

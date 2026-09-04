@@ -60,6 +60,10 @@ final class PersistentWorkerTest extends TestCase
      * and turn one bad request into worker_crashed, when an error reply
      * answers it just as definitively - and the same warm worker keeps
      * serving the very next request.
+     *
+     * The handler is application-level (injected, same as bin/server.php
+     * does) - the same calculate route the server configures, whose `a + b`
+     * throws a TypeError on non-numeric params.
      */
     public function testHandlerFailureAnswersWithAnErrorAndTheWorkerSurvives(): void
     {
@@ -71,7 +75,11 @@ final class PersistentWorkerTest extends TestCase
         if ($pid === 0) {
             $pair->closeMaster();
 
-            (new WorkerRunner($pair->getWorkerSocket()))->run();
+            $calculate = static fn (array $payload): array => [
+                'result' => $payload['params']['a'] + $payload['params']['b'],
+            ];
+
+            (new WorkerRunner($pair->getWorkerSocket(), $calculate))->run();
 
             exit(0);
         }

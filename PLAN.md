@@ -1886,6 +1886,23 @@ itself:
 
 ---
 
+# Post-Phase-20: Business Logic Moved to Server Configuration
+
+`WorkerRunner` no longer hardcodes what requests DO. The `calculate` route
+(added back in Phase 12) lived inside the runtime; it now lives in
+`bin/server.php`, passed into `Master` as an application handler - a
+`payload in -> payload out` closure that `ForkedWorkerLauncher` hands each
+forked worker (fork() copies parent memory, so it reaches replacements and
+scale-ups forked long after startup too). The runtime keeps everything
+protocol-shaped: the response reuses the request's correlation id and the
+RESPONSE/ERROR envelope (including handler_failed when the handler throws)
+is applied by `WorkerRunner` itself, so an application handler cannot break
+routing no matter what it returns or throws. With no handler configured,
+`WorkerRunner` falls back to echoing the payload - the behavior the
+protocol-level tests rely on.
+
+---
+
 # Recommended Implementation Order
 
 ## MVP
