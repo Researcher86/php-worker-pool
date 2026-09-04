@@ -17,6 +17,8 @@ final class MetricsTest extends TestCase
             workersIdle: 3,
             workersBusy: 5,
             workersCrashedTotal: 0,
+            workersRecycledTotal: 12,
+            workersDraining: 1,
             queueSize: 124,
             requestsTotal: 100_000,
             requestsCompleted: 99_800,
@@ -28,7 +30,10 @@ final class MetricsTest extends TestCase
         $formatted = $metrics->format();
 
         $this->assertStringContainsString('Worker Pool Status', $formatted);
-        $this->assertStringContainsString("Workers:\n  Total: 8\n  Idle: 3\n  Busy: 5", $formatted);
+        $this->assertStringContainsString(
+            "Workers:\n  Total: 8\n  Idle: 3\n  Busy: 5\n  Draining: 1\n  Crashed (lifetime): 0\n  Recycled (lifetime): 12",
+            $formatted
+        );
         $this->assertStringContainsString("Queue:\n  Pending: 124", $formatted);
         $this->assertStringContainsString(
             "Requests:\n  Total: 100000\n  Completed: 99800\n  Failed: 150\n  Timeout: 50",

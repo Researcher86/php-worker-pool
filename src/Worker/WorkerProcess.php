@@ -8,27 +8,45 @@ use App\IPC\Socket;
 use App\Protocol\Message;
 
 /**
- * Master-side handle for one worker process: its pid, its socket, and its
- * lifecycle state.
+ * Master-side handle for one worker process: its pid, its socket, its
+ * lifecycle state, and the counters recycling decides on.
  *
  * State machine (see WorkerState):
  *
  *   STARTING ──beginRequest()──> BUSY ──finishRequest()──> IDLE
  *      │                          │  ↑____________________/
  *      │                          │        beginRequest()
- *      └──────────stop()──────────┴──────────stop()──────────> STOPPING
+ *      │                          │
+ *      │        drain()           │        drain()
+ *      └────────────┬─────────────┴────────────┐
+ *                   ▼                          ▼
+ *               DRAINING ◀──finishRequest()──DRAINING
+ *               (no work)                   (still working)
+ *                   │
+ *                   │  stop()          (also legal from any state but DEAD,
+ *                   ▼                   so shutdown is never blocked)
+ *               STOPPING
+ *                   │
+ *                   ▼
+ *   any state ──markDead()──> DEAD (terminal, no way out)
  *
- *   any state except DEAD ──markDead()──> DEAD (terminal, no way out)
+ * Two things are tracked separately on purpose: the STATE says whether new
+ * work may be dispatched here, and $currentRequestId says whether work is
+ * happening right now. DRAINING is the combination the old design needed a
+ * second map for - "no new requests, but leave whatever it's doing alone".
+ * A worker drained while BUSY keeps its request id until it answers.
  *
- * "Available" (isAvailable()) means STARTING or IDLE — the two states from
- * which a new request may be dispatched, and also the only states from
- * which stop() would normally be requested during a graceful shutdown
- * (stop() still allows BUSY/STOPPING so shutdown is never blocked by a
- * worker that's mid-request or already stopping).
+ * "Available" (isAvailable()) means STARTING or IDLE - the two states from
+ * which a new request may be dispatched.
  */
 final class WorkerProcess
 {
     private const array AVAILABLE_STATES = [WorkerState::STARTING, WorkerState::IDLE];
+
+    /** The two counters recycling decides on - see WorkerPool::recycleExhaustedWorkers(). */
+    private int $handledRequests = 0;
+
+    private ?float $startedAt = null;
 
     public function __construct(
         private readonly int $pid,
@@ -36,6 +54,33 @@ final class WorkerProcess
         private WorkerState $state = WorkerState::STARTING,
         private ?string $currentRequestId = null,
     ) {
+    }
+
+    /** How many requests this worker has completed since it was forked. */
+    public function getHandledRequests(): int
+    {
+        return $this->handledRequests;
+    }
+
+    /**
+     * Stamped by WorkerPool when it takes ownership, from the pool's own
+     * Clock - deliberately not read here from a clock of this object's own,
+     * which is how a WorkerProcess built by a test double ended up aged
+     * against a different timeline than the pool judging it.
+     */
+    public function markLaunchedAt(float $now): void
+    {
+        $this->startedAt ??= $now;
+    }
+
+    /**
+     * Seconds since the pool took ownership, per $now. An unstamped worker
+     * reports age 0 - never old enough to recycle, which is the safe way to
+     * be wrong.
+     */
+    public function getAgeSeconds(float $now): float
+    {
+        return $now - ($this->startedAt ?? $now);
     }
 
     public function getPid(): int
@@ -62,6 +107,12 @@ final class WorkerProcess
         return in_array($this->state, self::AVAILABLE_STATES, true);
     }
 
+    /** Whether the worker is working on a request right now, whatever its state. */
+    public function isWorking(): bool
+    {
+        return $this->currentRequestId !== null;
+    }
+
     /**
      * Marks the worker as busy with the given request, then returns
      * IDLE once the request has finished.
@@ -84,10 +135,45 @@ final class WorkerProcess
             return;
         }
 
-        $this->assertTransitions([WorkerState::BUSY]);
+        $this->assertTransitions([WorkerState::BUSY, WorkerState::DRAINING]);
 
         $this->currentRequestId = null;
-        $this->state = WorkerState::IDLE;
+        $this->handledRequests++;
+
+        // A worker drained mid-request stays DRAINING: it just answered its
+        // last request and is now free to be retired, not free to take
+        // another one.
+        if ($this->state === WorkerState::BUSY) {
+            $this->state = WorkerState::IDLE;
+        }
+    }
+
+    /**
+     * Takes the worker out of rotation without interrupting it: no new
+     * request will be dispatched here, and one already in flight is left
+     * completely alone - it finishes and its answer is routed back exactly
+     * as it would have been. WorkerPool::retireIdleWorkers() is what
+     * actually stops it, once isWorking() is false.
+     *
+     * The one mechanism behind graceful reload (a whole generation drained
+     * at once), scale-down (a few idle workers), and recycling (one worker
+     * that hit a limit).
+     *
+     * Idempotent, and a no-op once the worker is already on its way out -
+     * draining something that is STOPPING or DEAD would be a step backwards.
+     */
+    public function drain(): void
+    {
+        if ($this->state === WorkerState::STOPPING || $this->state === WorkerState::DEAD) {
+            return;
+        }
+
+        $this->state = WorkerState::DRAINING;
+    }
+
+    public function isDraining(): bool
+    {
+        return $this->state === WorkerState::DRAINING;
     }
 
     /**
@@ -101,6 +187,7 @@ final class WorkerProcess
             WorkerState::STARTING,
             WorkerState::IDLE,
             WorkerState::BUSY,
+            WorkerState::DRAINING,
             WorkerState::STOPPING,
         ]);
 

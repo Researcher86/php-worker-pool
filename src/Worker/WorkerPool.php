@@ -6,8 +6,10 @@ namespace App\Worker;
 
 use App\Protocol\Message;
 use App\Protocol\MessageType;
+use App\Support\Clock;
 use App\Support\Logger;
 use App\Support\NullLogger;
+use App\Support\SystemClock;
 
 final class WorkerPool
 {
@@ -25,13 +27,10 @@ final class WorkerPool
     // essentially immediately, so that number is almost always 0.
     private int $totalCrashed = 0;
 
-    // PLAN.md Phase 19: pids of the outgoing generation during a reload().
-    // Still present in $workers (so stop()/reapDeadWorkers() keep working
-    // unchanged) but excluded from getAvailable() - a busy one is left
-    // completely alone until it finishes on its own, a set-and-forget flag
-    // rather than a second array to keep in sync.
-    /** @var array<int, true> */
-    private array $retiringPids = [];
+    // Lifetime count of workers replaced because they hit a recycling limit
+    // - an expected, healthy event, deliberately counted apart from crashes
+    // so a rising number here doesn't read as instability.
+    private int $totalRecycled = 0;
 
     // PLAN.md Phase 19/20 interaction: outgoing pids from reload() still
     // waiting for a replacement because launching one right away would push
@@ -54,12 +53,14 @@ final class WorkerPool
         // failures this class deliberately survives instead of rethrowing)
         // get recorded, so they're at least diagnosable after the fact.
         private readonly Logger $logger = new NullLogger(),
+        // When to replace a worker with a fresh process - off by default.
+        private readonly RecyclingPolicy $recycling = new RecyclingPolicy(),
+        private readonly WorkerMemory $memory = new ProcMemory(),
+        private readonly Clock $clock = new SystemClock(),
     ) {
         try {
             for ($i = 0; $i < $workerCount; $i++) {
-                $worker = $this->launcher->launch();
-
-                $this->workers[$worker->getPid()] = $worker;
+                $this->register($this->launcher->launch());
             }
         } catch (\Throwable $e) {
             // A launch() partway through (e.g. ForkedWorkerLauncher on a
@@ -73,6 +74,19 @@ final class WorkerPool
 
             throw $e;
         }
+    }
+
+    /**
+     * The one place a freshly launched worker enters the pool: stamped with
+     * the pool's own clock so recycling ages every worker against the same
+     * timeline, whoever built it.
+     */
+    private function register(WorkerProcess $worker): WorkerProcess
+    {
+        $worker->markLaunchedAt($this->clock->now());
+        $this->workers[$worker->getPid()] = $worker;
+
+        return $worker;
     }
 
     public function count(): int
@@ -93,7 +107,7 @@ final class WorkerPool
 
     /**
      * The pool's forward-looking size: workers that are staying, i.e. not
-     * retiring, not STOPPING, not DEAD. Differs from count() only during
+     * draining, not STOPPING, not DEAD. Differs from count() only during
      * transitions - right after reload() the pool briefly holds both the new
      * generation and the outgoing one, and count() sees them all. Scaling
      * decisions must use this one: judging "too many workers" by count()
@@ -104,11 +118,8 @@ final class WorkerPool
     {
         $active = 0;
 
-        foreach ($this->workers as $pid => $worker) {
-            if (!isset($this->retiringPids[$pid])
-                && $worker->getState() !== WorkerState::STOPPING
-                && $worker->getState() !== WorkerState::DEAD
-            ) {
+        foreach ($this->workers as $worker) {
+            if (!in_array($worker->getState(), [WorkerState::DRAINING, WorkerState::STOPPING, WorkerState::DEAD], true)) {
                 $active++;
             }
         }
@@ -121,14 +132,20 @@ final class WorkerPool
         return $this->totalCrashed;
     }
 
+    /** How many workers have been recycled over the pool's whole lifetime. */
+    public function totalRecycled(): int
+    {
+        return $this->totalRecycled;
+    }
+
     /**
      * Returns the id of any worker that can currently accept a request, or
-     * null if all workers are busy, stopping, or dead.
+     * null if every worker is busy, draining, stopping, or dead.
      */
     public function getAvailable(): ?int
     {
         foreach ($this->workers as $id => $worker) {
-            if (!isset($this->retiringPids[$id]) && $worker->isAvailable()) {
+            if ($worker->isAvailable()) {
                 return $id;
             }
         }
@@ -204,8 +221,7 @@ final class WorkerPool
 
             if ($this->accepting) {
                 try {
-                    $replacement = $this->launcher->launch();
-                    $this->workers[$replacement->getPid()] = $replacement;
+                    $this->register($this->launcher->launch());
                 } catch (\Throwable $e) {
                     // Same reasoning as advanceReload(): don't let a failed
                     // launch() propagate out of a SIGCHLD handler. Unlike
@@ -236,15 +252,15 @@ final class WorkerPool
      * PLAN.md Phase 19: replaces the whole pool without ever going below
      * its configured size or dropping a request in flight. Starts a full
      * new generation immediately - they're available for new dispatch right
-     * away - and marks every worker that existed before this call retiring:
+     * away - and drains every worker that existed before this call:
      * excluded from new dispatch, but a busy one is otherwise left
      * completely alone (its current request finishes and gets answered
      * exactly as it would have anyway - Dispatcher never even knows a
      * reload happened). retireIdleWorkers() is what actually shuts a
-     * retiring worker down, once it's confirmed idle.
+     * draining worker down, once it has stopped working.
      *
      * A reload already in progress (some previous generation still
-     * retiring, or still waiting on $maxWorkers headroom) makes this a
+     * draining, or still waiting on $maxWorkers headroom) makes this a
      * no-op - stacking reloads would launch another full generation on top
      * of one that hasn't finished leaving yet, growing the pool instead of
      * replacing it.
@@ -252,7 +268,7 @@ final class WorkerPool
     public function reload(): void
     {
         $this->withSigchldDeferred(function (): void {
-            if ($this->retiringPids !== [] || $this->pendingReload !== []) {
+            if ($this->pendingReload !== [] || $this->countDraining() > 0) {
                 return;
             }
 
@@ -268,12 +284,12 @@ final class WorkerPool
      * launching a full duplicate generation up front (the old behavior)
      * could momentarily double the live process count past it. Always makes
      * progress on at least one, even over the cap, if nothing is currently
-     * retiring - otherwise a reload requested while already at $maxWorkers
+     * draining - otherwise a reload requested while already at $maxWorkers
      * would never start at all.
      */
     private function advanceReload(): void
     {
-        while ($this->pendingReload !== [] && (count($this->workers) < $this->maxWorkers || $this->retiringPids === [])) {
+        while ($this->pendingReload !== [] && (count($this->workers) < $this->maxWorkers || $this->countDraining() === 0)) {
             $pid = array_shift($this->pendingReload);
 
             try {
@@ -293,16 +309,95 @@ final class WorkerPool
                 break;
             }
 
-            $this->workers[$worker->getPid()] = $worker;
-            $this->retiringPids[$pid] = true;
+            $this->register($worker);
+
+            // The outgoing worker may already be gone (crashed and reaped
+            // since the reload started) - its replacement is launched
+            // either way, which is the point of the pass.
+            ($this->workers[$pid] ?? null)?->drain();
         }
 
         $this->doRetireIdleWorkers();
     }
 
     /**
-     * Shuts down any retiring worker (see reload()) that has finished
-     * whatever it was doing and is now idle. Meant to be polled
+     * Drains every worker that has hit a recycling limit, launching a
+     * replacement for each - the routine, healthy version of what
+     * reapDeadWorkers() does for a crash.
+     *
+     * Nothing is interrupted: a worker over its limit while BUSY keeps its
+     * request, answers it, and only then exits (retireIdleWorkers(), the
+     * next tick). That is why a replacement is launched HERE rather than
+     * when the worker finally exits - the pool would otherwise run a worker
+     * short for as long as that last request takes.
+     *
+     * Polled once per Master tick, like the other sweeps. With no policy
+     * configured it returns immediately without touching a thing.
+     *
+     * @return int how many workers were drained this pass
+     */
+    public function recycleExhaustedWorkers(): int
+    {
+        if (!$this->recycling->isEnabled()) {
+            return 0;
+        }
+
+        return $this->withSigchldDeferred(function (): int {
+            $now = $this->clock->now();
+            $recycled = 0;
+
+            foreach ($this->workers as $pid => $worker) {
+                // Only workers still in rotation: one already draining is on
+                // its way out anyway, and a STOPPING/DEAD one is gone.
+                if ($worker->isDraining() || !in_array($worker->getState(), [WorkerState::STARTING, WorkerState::IDLE, WorkerState::BUSY], true)) {
+                    continue;
+                }
+
+                $reason = $this->recycling->exhaustedReason(
+                    $worker,
+                    $now,
+                    $this->recycling->maxMemoryBytes === null ? null : $this->memory->measure($pid),
+                );
+
+                if ($reason === null) {
+                    continue;
+                }
+
+                // Replacement first: if it can't be launched right now,
+                // leave the tired worker serving rather than shrink the
+                // pool. It'll be retried next tick, still over its limit.
+                try {
+                    $replacement = $this->launcher->launch();
+                } catch (\Throwable $e) {
+                    $this->logger->log('recycle: keeping worker ' . $pid . ' - no replacement could be launched: ' . $e->getMessage());
+
+                    break;
+                }
+
+                $this->register($replacement);
+
+                $worker->drain();
+                $this->totalRecycled++;
+                $recycled++;
+
+                $this->logger->log(sprintf('recycling worker %d: %s', $pid, $reason));
+            }
+
+            $this->doRetireIdleWorkers();
+
+            return $recycled;
+        });
+    }
+
+    /** How many workers are on their way out but not stopped yet. */
+    public function countDraining(): int
+    {
+        return count(array_filter($this->workers, static fn (WorkerProcess $w) => $w->isDraining()));
+    }
+
+    /**
+     * Shuts down every draining worker that has stopped working - whether it
+     * was drained by a reload, a scale-down, or recycling. Meant to be polled
      * periodically (Master does this every tick, alongside its other
      * per-tick sweeps) rather than triggered by an event, since nothing
      * currently notifies WorkerPool the moment a specific worker finishes a
@@ -315,27 +410,18 @@ final class WorkerPool
 
     private function doRetireIdleWorkers(): void
     {
-        foreach (array_keys($this->retiringPids) as $pid) {
-            $worker = $this->workers[$pid] ?? null;
-
-            // isAvailable(), not just "=== IDLE": a retiring worker that was
-            // never dispatched to at all (still STARTING) is just as safe
-            // to retire right away as one that finished and went IDLE -
-            // checking IDLE only would leave a never-used worker retiring
-            // forever.
-            if ($worker === null || !$worker->isAvailable()) {
-                if ($worker === null) {
-                    unset($this->retiringPids[$pid]); // gone already (e.g. crashed) - nothing left to retire
-                }
-
+        foreach ($this->workers as $pid => $worker) {
+            // isWorking(), not a state check: a worker drained while BUSY
+            // stays DRAINING with its request id until it answers, and one
+            // drained before it was ever dispatched to has no id at all -
+            // both are "safe to stop" exactly when no request is in flight.
+            if (!$worker->isDraining() || $worker->isWorking()) {
                 continue;
             }
 
             $worker->stop();
-            $worker->write(new Message(MessageType::SHUTDOWN, 'reload-' . $pid));
+            $worker->write(new Message(MessageType::SHUTDOWN, 'retire-' . $pid));
             $worker->close();
-
-            unset($this->retiringPids[$pid]);
             // Left in $this->workers on purpose: reapDeadWorkers() (SIGCHLD)
             // will clean it up once the process actually exits, the same
             // way it does for a crash - stop() also still needs to find it
@@ -369,7 +455,7 @@ final class WorkerPool
                     break;
                 }
 
-                $this->workers[$worker->getPid()] = $worker;
+                $this->register($worker);
                 $launched++;
             }
 
@@ -393,16 +479,16 @@ final class WorkerPool
         return $this->withSigchldDeferred(function () use ($count): int {
             $marked = 0;
 
-            foreach ($this->workers as $pid => $worker) {
+            foreach ($this->workers as $worker) {
                 if ($marked >= $count) {
                     break;
                 }
 
-                if (isset($this->retiringPids[$pid]) || !$worker->isAvailable()) {
-                    continue;
+                if (!$worker->isAvailable()) {
+                    continue; // busy, already draining, stopping or dead
                 }
 
-                $this->retiringPids[$pid] = true;
+                $worker->drain();
                 $marked++;
             }
 

@@ -9,6 +9,8 @@ enum WorkerState
     case STARTING;
     case IDLE;
     case BUSY;
+    /** Finishing its current request, if any, then leaving - see WorkerProcess::drain(). */
+    case DRAINING;
     case STOPPING;
     case DEAD;
 }

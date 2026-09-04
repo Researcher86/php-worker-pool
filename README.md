@@ -351,13 +351,14 @@ Each Worker has a state.
 STARTING
     │
     ▼
-   IDLE
+   IDLE ◀─────────┐
+    │             │
+    ▼             │
+   BUSY ──────────┘
     │
-    ▼
-   BUSY
-    │
-    ▼
-   IDLE
+    │  drain()  ── reload, scale-down or recycling:
+    ▼             no new work, finish what you have
+ DRAINING
     │
     ▼
 STOPPING
@@ -372,9 +373,15 @@ Possible states:
 STARTING
 IDLE
 BUSY
+DRAINING
 STOPPING
 DEAD
 ```
+
+`DRAINING` is what makes graceful reload, scale-down and worker recycling
+one mechanism instead of three: the worker takes no new request, but the one
+it is already holding is left completely alone and answered normally before
+it exits.
 
 ---
 

@@ -21,6 +21,7 @@ use App\Support\StderrLogger;
 use App\Support\SystemClock;
 use App\Worker\Autoscaler;
 use App\Worker\ForkedWorkerLauncher;
+use App\Worker\RecyclingPolicy;
 use App\Worker\WorkerPool;
 
 final class Master
@@ -76,6 +77,18 @@ final class Master
         private readonly float $gracefulShutdownTimeoutSeconds = 30.0,
         private readonly Logger $logger = new StderrLogger(),
         private readonly Clock $clock = new SystemClock(),
+        // When to replace a worker with a fresh process. A long-running PHP
+        // process accumulates leaked memory and stale static state that a
+        // per-request runtime discards for free, so persistent-worker
+        // runtimes all offer this (php-fpm's pm.max_requests, RoadRunner's
+        // max_jobs/max_memory). The defaults here are conservative rather
+        // than off: recycling costs one fork and never interrupts a request,
+        // so the cheap insurance is worth taking by default.
+        private readonly RecyclingPolicy $recycling = new RecyclingPolicy(
+            maxRequests: 10_000,
+            maxLifetime: 3600.0,
+            maxMemoryBytes: 256 * 1024 * 1024,
+        ),
         // The application's request handler, run inside each worker:
         // \Closure(Worker\Request): Worker\Response. This is where business
         // logic enters the system - defined wherever the server is
@@ -92,6 +105,8 @@ final class Master
             new ForkedWorkerLauncher($this->handler),
             maxWorkers: $this->maxWorkers,
             logger: $this->logger,
+            recycling: $this->recycling,
+            clock: $this->clock,
         );
         $this->loop = new EventLoop();
         $this->pendingRequests = new PendingRequestRegistry($this->clock);
@@ -126,6 +141,7 @@ final class Master
                 $this->dispatcher->dispatchQueued();
 
                 $this->sendTimeouts();
+                $this->pool->recycleExhaustedWorkers();
                 $this->pool->retireIdleWorkers();
                 $autoscaler->check();
             }

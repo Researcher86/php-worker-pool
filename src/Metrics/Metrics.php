@@ -19,6 +19,8 @@ final readonly class Metrics
         public int $workersIdle,
         public int $workersBusy,
         public int $workersCrashedTotal,
+        public int $workersRecycledTotal,
+        public int $workersDraining,
         public int $queueSize,
         public int $requestsTotal,
         public int $requestsCompleted,
@@ -39,7 +41,9 @@ final readonly class Metrics
               Total: %d
               Idle: %d
               Busy: %d
+              Draining: %d
               Crashed (lifetime): %d
+              Recycled (lifetime): %d
 
             Queue:
               Pending: %d
@@ -55,7 +59,9 @@ final readonly class Metrics
             $this->workersTotal,
             $this->workersIdle,
             $this->workersBusy,
+            $this->workersDraining,
             $this->workersCrashedTotal,
+            $this->workersRecycledTotal,
             $this->queueSize,
             $this->requestsTotal,
             $this->requestsCompleted,

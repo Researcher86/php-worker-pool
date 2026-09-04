@@ -423,8 +423,14 @@ starved by silence):
       $this->sendTimeouts();           ← PendingRequestRegistry::removeExpired
                                           → error request_timeout per entry
 
-      $pool->retireIdleWorkers();      ← a retiring worker that has gone idle
-                                          gets SHUTDOWN and its socket closed
+      $pool->recycleExhaustedWorkers();← a worker past maxRequests, maxLifetime
+                                          or maxMemory is DRAINED and replaced;
+                                          if it is mid-request it keeps it and
+                                          answers normally first
+
+      $pool->retireIdleWorkers();      ← a draining worker that has stopped
+                                          working gets SHUTDOWN and its socket
+                                          closed
 
       $autoscaler->check();            ← queue busy and nothing idle → +2
                                           queue empty and idle to spare → -2

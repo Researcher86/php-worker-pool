@@ -231,8 +231,8 @@ final class WorkerPoolTest extends TestCase
 
         $pool->reload();
 
-        // Briefly inflated (old generation still present, marked STOPPING,
-        // not yet reaped) - both old and new exist at once during reload.
+        // Briefly inflated (old generation still present, DRAINING then
+        // STOPPING, not yet reaped) - both exist at once during a reload.
         $this->assertSame(4, $pool->count());
 
         $pool->stop();
@@ -254,16 +254,26 @@ final class WorkerPoolTest extends TestCase
         $worker = $pool->write($busyId, new Message(MessageType::REQUEST, 'req-1'));
 
         $pool->reload();
-        $pool->retireIdleWorkers(); // no-op for a still-busy worker
+        $pool->retireIdleWorkers(); // no-op while it's still working
 
-        $this->assertSame(WorkerState::BUSY, $worker->getState());
+        // DRAINING, not BUSY: it will take no NEW request, but the one it
+        // has is left completely alone - that combination is exactly what
+        // the state exists to express.
+        $this->assertSame(WorkerState::DRAINING, $worker->getState());
+        $this->assertTrue($worker->isWorking());
         $this->assertSame('req-1', $worker->getCurrentRequestId()); // untouched by reload
 
         // The new generation is immediately usable, the retiring one is not.
         $this->assertNotSame($busyId, $pool->getAvailable());
 
-        // Finishes its request normally, same as if no reload had happened.
+        // Finishes its request normally, same as if no reload had happened -
+        // and stays DRAINING rather than going back to IDLE, so it can't be
+        // handed another one in the window before it's retired.
         $worker->finishRequest();
+        $this->assertSame(WorkerState::DRAINING, $worker->getState());
+        $this->assertFalse($worker->isWorking());
+        $this->assertNull($pool->getAvailable() === $busyId ? $busyId : null);
+
         $pool->retireIdleWorkers();
 
         $this->assertSame(WorkerState::STOPPING, $worker->getState());
