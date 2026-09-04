@@ -4,6 +4,8 @@
 
 `php-worker-pool` is an educational project that explores how multi-process PHP runtimes and worker-based architectures work internally.
 
+**[docs/REQUEST-LIFECYCLE.md](docs/REQUEST-LIFECYCLE.md)** follows a single request all the way through - client, Master, worker and back - with the detail of every hop: framing, correlation ids, dispatch, the event loop, the failure paths, and what the Master does between requests.
+
 The project implements a long-running Master process that accepts requests from external PHP applications, delegates work to a pool of persistent workers, and asynchronously routes responses back to clients.
 
 The goal is not to replace existing solutions such as RoadRunner, Workerman, Swoole, or PHP-FPM.
