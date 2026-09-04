@@ -1901,6 +1901,21 @@ routing no matter what it returns or throws. With no handler configured,
 `WorkerRunner` falls back to echoing the payload - the behavior the
 protocol-level tests rely on.
 
+**Typed handler payloads (follow-up):** the handler declares the payload
+shape it wants in its own signature. `HandlerAdapter` reflects it once at
+worker startup: an `array` (or untyped) parameter gets the raw payload
+as-is; a DTO class parameter gets the payload hydrated into it through its
+constructor - payload keys matched to parameter names, extra keys ignored,
+absent optional parameters falling back to defaults, class-typed parameters
+hydrated recursively from nested arrays. Symmetrically, the handler may
+return a DTO - its JSON-visible state becomes the response payload. A
+payload that doesn't fit the declared DTO (missing required key, wrong
+type) is answered as `invalid_payload` WITHOUT the handler running -
+distinct from `handler_failed` (the handler itself throwing), so the client
+knows which side to fix. bin/server.php demonstrates both directions
+(CalculateRequest in, CalculateResult out). Covered by `HandlerAdapterTest`
+and `PersistentWorkerTest::testDtoTypedHandlerGetsHydratedPayloadAndBadPayloadIsRejected`.
+
 ---
 
 # Recommended Implementation Order

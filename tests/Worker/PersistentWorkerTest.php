@@ -115,6 +115,61 @@ final class PersistentWorkerTest extends TestCase
         $this->assertTrue(pcntl_wifexited($status));
     }
 
+    /**
+     * The full typed-handler path through a real worker process: the handler
+     * declares a DTO parameter, the runtime hydrates each request's payload
+     * into it before the call (HandlerAdapter), and a payload that doesn't
+     * fit is answered with invalid_payload - distinct from handler_failed,
+     * and without the handler ever running or the worker dying.
+     */
+    public function testDtoTypedHandlerGetsHydratedPayloadAndBadPayloadIsRejected(): void
+    {
+        $pair = new SocketPair();
+
+        $pid = pcntl_fork();
+        $this->assertNotSame(-1, $pid, 'fork failed');
+
+        if ($pid === 0) {
+            $pair->closeMaster();
+
+            $handler = static fn (SumRequest $request): array => [
+                'result' => $request->a + $request->b,
+            ];
+
+            (new WorkerRunner($pair->getWorkerSocket(), $handler))->run();
+
+            exit(0);
+        }
+
+        $pair->closeWorker();
+        $master = $pair->getMasterSocket();
+
+        // Hydrates into SumRequest(a: 10, b: 20) - 'extra' is ignored.
+        $master->write(new Message(MessageType::REQUEST, 'sum-1', ['a' => 10, 'b' => 20, 'extra' => true]));
+
+        $response = $master->read()[0];
+        $this->assertSame(MessageType::RESPONSE, $response->type);
+        $this->assertSame(['result' => 30], $response->payload);
+
+        // Missing required 'b' - rejected before the handler runs.
+        $master->write(new Message(MessageType::REQUEST, 'sum-2', ['a' => 10]));
+
+        $error = $master->read()[0];
+        $this->assertSame(MessageType::ERROR, $error->type);
+        $this->assertSame('sum-2', $error->id);
+        $this->assertSame(['error' => 'invalid_payload'], $error->payload);
+
+        // The same worker is still alive and serving.
+        $master->write(new Message(MessageType::REQUEST, 'sum-3', ['a' => 1, 'b' => 2]));
+        $this->assertSame(['result' => 3], $master->read()[0]->payload);
+
+        $master->write(new Message(MessageType::SHUTDOWN, 'shutdown-1'));
+        $master->close();
+
+        pcntl_waitpid($pid, $status);
+        $this->assertTrue(pcntl_wifexited($status));
+    }
+
     public function testWorkerExitsCleanlyWhenMasterClosesConnectionWithoutShutdown(): void
     {
         $pair = new SocketPair();
@@ -138,5 +193,14 @@ final class PersistentWorkerTest extends TestCase
 
         $this->assertTrue(pcntl_wifexited($status));
         $this->assertSame(0, pcntl_wexitstatus($status));
+    }
+}
+/** Application-style DTO for the typed-handler round-trip test above. */
+final readonly class SumRequest
+{
+    public function __construct(
+        public int $a,
+        public int $b,
+    ) {
     }
 }

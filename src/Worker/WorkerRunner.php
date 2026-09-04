@@ -14,19 +14,22 @@ use App\Protocol\MessageType;
  * its payload to the application handler, write the response back.
  *
  * What requests actually DO is not this class's business - it's the
- * application's, injected as $handler (payload in, payload out) and defined
- * where the server is configured (see bin/server.php). Everything protocol-
- * shaped stays here on purpose: the response keeps the request's correlation
- * id and the RESPONSE/ERROR envelope is applied by this class, so an
- * application handler cannot break routing no matter what it returns or
- * throws.
+ * application's, injected as $handler and defined where the server is
+ * configured (see bin/server.php). The handler declares the payload shape
+ * it wants: `array` gets the raw payload, a DTO class gets the payload
+ * hydrated into it, and it may return an array or a DTO back - see
+ * HandlerAdapter, which reflects the signature once at startup. Everything
+ * protocol-shaped stays here on purpose: the response keeps the request's
+ * correlation id and the RESPONSE/ERROR envelope is applied by this class,
+ * so an application handler cannot break routing no matter what it returns
+ * or throws.
  */
 final readonly class WorkerRunner
 {
     /** @var \Closure(array<string, mixed>): array<string, mixed> */
     private \Closure $handler;
 
-    /** @param \Closure(array<string, mixed>): array<string, mixed>|null $handler */
+    /** @param \Closure|null $handler application handler in any HandlerAdapter-supported signature */
     public function __construct(
         private Socket $socket,
         ?\Closure $handler = null,
@@ -34,7 +37,9 @@ final readonly class WorkerRunner
         // Default: echo the payload back - the behavior the protocol-level
         // tests rely on, and a sane placeholder until an application
         // provides something real.
-        $this->handler = $handler ?? static fn (array $payload): array => $payload;
+        $this->handler = $handler === null
+            ? static fn (array $payload): array => $payload
+            : HandlerAdapter::adapt($handler);
     }
 
     public function run(): void
@@ -59,6 +64,11 @@ final readonly class WorkerRunner
 
                 try {
                     $response = $this->handle($message);
+                } catch (PayloadHydrationException) {
+                    // The payload doesn't fit the DTO the handler declared -
+                    // the CLIENT's fault, reported distinctly from a handler
+                    // bug so the caller knows which side to fix.
+                    $response = new Message(MessageType::ERROR, $message->id, ['error' => 'invalid_payload']);
                 } catch (\Throwable) {
                     // A handler bug must not kill the worker: crashing here
                     // would cost the Master a reap-and-refork and turn one
