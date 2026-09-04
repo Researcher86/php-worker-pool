@@ -16,27 +16,23 @@ Master is single-threaded and never blocks on application work; the workers
 block freely, because that is all they do.
 
 ```text
-   YOUR PROCESS                  MASTER PROCESS                WORKER PROCESSES
-   (PHP-FPM / CLI /              (bin/server.php)              (forked by the Master)
-    cron / consumer)
+  ┌──────────────────┐                  ┌──────────────┐      ┌──────────────────┐
+  │ WorkerPoolClient │                  │              │      │  WorkerRunner    │
+  │                  │                  │    Master    │      │                  │
+  │  send()          │═════════════════▶│              │═════▶│  blocking read   │
+  │  await()         │                  │              │      │  handler         │
+  │  all()           │◀═════════════════│              │◀═════│  write back      │
+  └──────────────────┘                  └──────────────┘      └──────────────────┘
 
-  ┌────────────────┐                                          ┌──────────────────┐
-  │ WorkerPoolClient│                                         │  WorkerRunner    │
-  │                │  Unix domain socket   ┌──────────────┐   │                  │
-  │  send()        │═════════════════════▶ │              │   │  blocking read   │
-  │  await()       │  /tmp/php-worker-     │   Master     │◀═▶│  handler         │
-  │  all()         │  pool.sock            │              │   │  write back      │
-  └────────────────┘◀═════════════════════ └──────────────┘   └──────────────────┘
-                                                  ▲  socketpair(AF_UNIX)
-                                                  │  one per worker
-                                                  │  (IPC, no filesystem)
-                                            ┌─────┴──────┐
-                                            │ EventLoop  │  one stream_select()
-                                            │            │  over: listener +
-                                            │            │  every client socket +
-                                            │            │  every BUSY worker +
-                                            │            │  the signal self-pipe
-                                            └────────────┘
+                       Unix domain socket                socketpair(AF_UNIX),
+                       /tmp/php-worker-pool.sock         one per worker -
+                                               ▲         never a file
+                                               │
+                                         ┌─────┴──────┐
+                                         │  EventLoop │  one stream_select() over:
+                                         │            │  the listener + every client socket
+                                         │            │  + every BUSY worker + the self-pipe
+                                         └────────────┘
 ```
 
 Both socket kinds carry the exact same framing and the exact same `Message`
@@ -269,9 +265,8 @@ through to its answer.
           ▼
       pending->client->write(
           Message($type, $pending->originalId, $payload) )
-                            ▲
-                            └─ the CLIENT's own id is restored here
-          │
+          │                 ▲
+          │                 └─ the CLIENT's own id is restored here
           ▼
       Dispatcher::pump()      ← the worker just went idle; hand it the
                                  next queued request immediately
@@ -351,7 +346,7 @@ workers; three `call()`s occupy one worker three times.
   │  write #3  ──▶ worker A busy      │
   │  (blocked)                        │
   1.5 ◀── #3                          │
-                                      
+
   total 1.50s                         total 0.51s
 ```
 
