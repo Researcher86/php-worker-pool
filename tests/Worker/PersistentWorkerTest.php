@@ -7,9 +7,9 @@ namespace App\Tests\Worker;
 use App\IPC\SocketPair;
 use App\Protocol\Message;
 use App\Protocol\MessageType;
+use App\Protocol\Request;
+use App\Protocol\Response;
 use App\Worker\PayloadHydrator;
-use App\Worker\Request;
-use App\Worker\Response;
 use App\Worker\WorkerRunner;
 use PHPUnit\Framework\TestCase;
 

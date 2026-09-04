@@ -7,6 +7,7 @@ namespace App\Tests\Sdk;
 use App\IPC\Socket;
 use App\Protocol\Message;
 use App\Protocol\MessageType;
+use App\Protocol\Request;
 use App\Sdk\ConnectionFailedException;
 use App\Sdk\RequestTimedOutException;
 use App\Sdk\ServerErrorException;
@@ -75,7 +76,7 @@ final class WorkerPoolClientTest extends TestCase
         });
 
         $client = new WorkerPoolClient($this->path);
-        $response = $client->call('calculate', ['a' => 10, 'b' => 20]);
+        $response = $client->call(new Request('calculate', ['a' => 10, 'b' => 20]));
 
         $this->assertSame(['result' => 30], $response);
 
@@ -90,7 +91,7 @@ final class WorkerPoolClientTest extends TestCase
         });
 
         $client = new WorkerPoolClient($this->path);
-        $response = $client->call('calculate', ['a' => 10, 'b' => 20]);
+        $response = $client->call(new Request('calculate', ['a' => 10, 'b' => 20]));
 
         $this->assertSame([
             'action' => 'calculate',
@@ -115,7 +116,7 @@ final class WorkerPoolClientTest extends TestCase
         $client = new WorkerPoolClient($this->path);
 
         try {
-            $client->call('calculate', ['a' => 1, 'b' => 2]);
+            $client->call(new Request('calculate', ['a' => 1, 'b' => 2]));
             $this->fail('an ERROR response must throw, not be returned as a result');
         } catch (ServerErrorException $e) {
             $this->assertSame('server_overloaded', $e->error);
@@ -139,7 +140,7 @@ final class WorkerPoolClientTest extends TestCase
         });
 
         $client = new WorkerPoolClient($this->path);
-        $response = $client->call('calculate', new Operands(10, 20));
+        $response = $client->call(new Request('calculate', new Operands(10, 20)));
 
         $this->assertSame([
             'action' => 'calculate',
@@ -155,7 +156,7 @@ final class WorkerPoolClientTest extends TestCase
 
         $this->expectException(ConnectionFailedException::class);
 
-        $client->call('calculate', ['a' => 1, 'b' => 2]);
+        $client->call(new Request('calculate', ['a' => 1, 'b' => 2]));
     }
 
     public function testNoResponseThrowsRequestTimedOutException(): void
@@ -173,7 +174,7 @@ final class WorkerPoolClientTest extends TestCase
         try {
             $this->expectException(RequestTimedOutException::class);
 
-            $client->call('calculate', ['a' => 1, 'b' => 2]);
+            $client->call(new Request('calculate', ['a' => 1, 'b' => 2]));
         } finally {
             posix_kill($pid, SIGKILL);
             pcntl_waitpid($pid, $status);

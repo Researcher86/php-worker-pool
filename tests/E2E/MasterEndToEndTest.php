@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\E2E;
 
+use App\Protocol\Request;
 use App\Sdk\ConnectionFailedException;
 use App\Sdk\WorkerPoolClient;
 use PHPUnit\Framework\TestCase;
@@ -41,7 +42,7 @@ final class MasterEndToEndTest extends TestCase
             // real server hydrates into its own CalculateRequest.
             $this->assertSame(
                 ['result' => 7],
-                $client->call('calculate', new E2EOperands(3, 4))
+                $client->call(new Request('calculate', new E2EOperands(3, 4)))
             );
 
             proc_terminate($process, SIGTERM);
@@ -77,7 +78,7 @@ final class MasterEndToEndTest extends TestCase
 
         while (true) {
             try {
-                return $client->call('calculate', ['a' => 10, 'b' => 20]);
+                return $client->call(new Request('calculate', ['a' => 10, 'b' => 20]));
             } catch (ConnectionFailedException $e) {
                 if (microtime(true) >= $deadline) {
                     throw $e;

@@ -10,6 +10,7 @@ use App\Protocol\MalformedMessageException;
 use App\Protocol\Message;
 use App\Protocol\MessageType;
 use App\Protocol\Payload;
+use App\Protocol\Request;
 
 /**
  * Minimal synchronous client for talking to a running Master over its Unix
@@ -31,18 +32,20 @@ final readonly class WorkerPoolClient
     }
 
     /**
-     * $params may be a plain array or a request DTO - an object contributes
-     * its JSON-visible state (see Protocol\Payload), so the call site can
-     * stay typed:
+     * Sends one Request - the same envelope type the worker's handler
+     * receives on the other side, so both ends speak in the same terms:
      *
-     *     $client->call('calculate', new Operands(a: 10, b: 20));
+     *     $client->call(new Request('calculate', new CalculateRequest(a: 10, b: 20)));
      *
-     * The DTO is the CALLER's own: nothing requires it to be the class the
-     * worker hydrates on the other side, only that the resulting keys match
-     * what that action expects - a mismatch comes back as
-     * ServerErrorException('invalid_payload').
+     * Its params may be a plain array or a DTO (Request normalizes it via
+     * Protocol\Payload), and that DTO is the CALLER's own: nothing requires
+     * it to be the class the worker hydrates on its side, only that the
+     * resulting keys match what the action expects - a mismatch comes back
+     * as ServerErrorException('invalid_payload').
      *
-     * @param array<string, mixed>|object $params
+     * Returns the response payload rather than a Response: a failed one
+     * throws instead (see below), so a returned Response could only ever be
+     * a successful one - an envelope with nothing left to decide.
      *
      * @return array<string, mixed> the response payload, i.e. whatever the
      *         worker's handler returned for this action
@@ -55,17 +58,14 @@ final readonly class WorkerPoolClient
      * @throws ConnectionClosedException  the connection dropped mid-request
      * @throws MalformedMessageException  the response didn't parse
      */
-    public function call(string $action, array|object $params = []): array
+    public function call(Request $request): array
     {
         $connection = $this->connect();
 
         try {
             $id = uniqid('req-', true);
 
-            $connection->write(new Message(MessageType::REQUEST, $id, [
-                'action' => $action,
-                'params' => Payload::of($params),
-            ]));
+            $connection->write(new Message(MessageType::REQUEST, $id, Payload::of($request)));
 
             $response = $this->awaitResponse($connection, $id);
 

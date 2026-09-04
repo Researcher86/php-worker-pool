@@ -8,6 +8,8 @@ use App\IPC\ConnectionClosedException;
 use App\IPC\Socket;
 use App\Protocol\Message;
 use App\Protocol\MessageType;
+use App\Protocol\Request;
+use App\Protocol\Response;
 
 /**
  * The loop a worker process runs for its whole life: read a request, hand it

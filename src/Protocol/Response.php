@@ -2,9 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Worker;
-
-use App\Protocol\Payload;
+namespace App\Protocol;
 
 /**
  * The counterpart of Request: what an application handler answers with.

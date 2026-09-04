@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace App\Tests\Worker;
 
+use App\Protocol\Request;
 use App\Worker\PayloadHydrationException;
 use App\Worker\PayloadHydrator;
-use App\Worker\Request;
 use PHPUnit\Framework\TestCase;
 
 final class PayloadHydratorTest extends TestCase

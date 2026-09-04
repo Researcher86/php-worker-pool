@@ -10,9 +10,9 @@ namespace App\Protocol;
  * properties, or whatever JsonSerializable returns - which is exactly the
  * view the wire encoding would take of it anyway.
  *
- * Lives in Protocol rather than on either side of the connection because
- * both use it and must agree: Sdk\WorkerPoolClient when a caller passes a
- * request DTO, Worker\Response when a handler answers with a result DTO.
+ * Lives in Protocol because both ends must agree on it: Request when a
+ * caller passes a request DTO, Response when a handler answers with a
+ * result DTO.
  */
 final class Payload
 {

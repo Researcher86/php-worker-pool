@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Worker;
 
 use App\IPC\SocketPair;
+use App\Protocol\Request;
+use App\Protocol\Response;
 
 /**
  * The real WorkerLauncher: forks an OS child process that runs the worker

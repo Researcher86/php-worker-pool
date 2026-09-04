@@ -2145,8 +2145,6 @@ src/
 │   ├── WorkerLauncher.php
 │   ├── ForkedWorkerLauncher.php
 │   ├── Autoscaler.php
-│   ├── Request.php
-│   ├── Response.php
 │   ├── PayloadHydrator.php
 │   └── PayloadHydrationException.php
 │
@@ -2156,7 +2154,15 @@ src/
 │   ├── MessageEncoder.php
 │   ├── MessageDecoder.php
 │   ├── Payload.php
+│   ├── Request.php
+│   ├── Response.php
 │   └── MalformedMessageException.php
+│
+├── Contract/            # the application layer, not the runtime
+│   └── Calculate/
+│       ├── CalculateAction.php
+│       ├── CalculateRequest.php
+│       └── CalculateResult.php
 │
 ├── IPC/
 │   ├── Socket.php
