@@ -20,13 +20,13 @@ Requires Docker. Nothing is installed on your machine.
 
 ```bash
 make install          # build the image and install dependencies
-make run              # start the Master (2 workers, grows to 16 under load)
+make run-server       # start the Master (2 workers, grows to 16 under load)
 ```
 
 In a second terminal:
 
 ```bash
-docker compose exec php php bin/client.php
+make run-client
 # {"result":30}
 # {"result":30}
 # [{"result":30},{"result":70},{"result":110}]
@@ -143,8 +143,16 @@ make analyse     # PHPStan level 6
 make shell       # a shell in the container
 ```
 
-Debugging is opt-in so that forked processes don't all reach for a debugger:
-`XDEBUG_TRIGGER=1 php bin/server.php`.
+Debugging is opt-in, so a run doesn't have a master plus N workers all
+reaching for a debugger that isn't there:
+
+```bash
+make run-server-debug     # same as run-server, with xdebug active
+make run-client-debug
+```
+
+Point the IDE at port 9003 first; without a listener the connection attempt
+just times out and the run continues.
 
 ---
 
