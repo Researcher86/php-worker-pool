@@ -1137,6 +1137,11 @@ and rejects atomically (throws before queueing anything) rather than
 partway through. Covered by `DispatcherTest::
 testRunRejectsABatchLargerThanQueueCapacity`.
 
+> **Superseded.** `Dispatcher::run()`, `hasCapacityFor()` and the whole
+> synchronous batch API were removed later - only tests ever used them. The
+> paragraph above is kept as the record of what the code once did; see
+> [DECISIONS.md](DECISIONS.md#simplification-one-execution-model-not-two).
+
 ---
 
 # Phase 14 — Request Timeouts
