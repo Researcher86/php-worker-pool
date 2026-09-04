@@ -6,8 +6,8 @@ namespace App\Worker;
 
 /**
  * Adapts an application handler of whatever signature it prefers to the
- * runtime's canonical `array payload in -> array payload out` contract
- * (see WorkerRunner), driven by the handler's own declared types:
+ * runtime's canonical `array payload in -> Response out` contract (see
+ * WorkerRunner), driven by the handler's own declared types:
  *
  *  - `function (array $payload)` (or untyped/mixed): the raw payload array
  *    is passed through as-is.
@@ -17,9 +17,10 @@ namespace App\Worker;
  *    class-typed parameters hydrated recursively from nested arrays. A
  *    payload that doesn't fit throws PayloadHydrationException (answered as
  *    `invalid_payload` - the client's fault, not the handler's).
- *  - The return value may be an array (used as-is) or an object (its
- *    JSON-visible state - public properties, or JsonSerializable - becomes
- *    the response payload). Anything else is a handler bug and throws.
+ *  - The return value may be a Response (used as-is, the only way to answer
+ *    with a deliberate application-level ERROR), an array, or an object
+ *    (its JSON-visible state becomes a successful response payload).
+ *    Anything else is a handler bug and throws.
  *
  * The signature is reflected ONCE, when the worker starts - per-request work
  * is only the hydration itself, and none at all for array-typed handlers.
@@ -27,13 +28,13 @@ namespace App\Worker;
 final class HandlerAdapter
 {
     /**
-     * @return \Closure(array<string, mixed>): array<string, mixed>
+     * @return \Closure(array<string, mixed>): Response
      */
     public static function adapt(\Closure $handler): \Closure
     {
         $payloadClass = self::payloadClass($handler);
 
-        return static function (array $payload) use ($handler, $payloadClass): array {
+        return static function (array $payload) use ($handler, $payloadClass): Response {
             $argument = $payloadClass === null ? $payload : self::hydrate($payloadClass, $payload);
 
             return self::normalize($handler($argument));
@@ -131,30 +132,22 @@ final class HandlerAdapter
     }
 
     /**
-     * The response payload for whatever the handler returned: an array
-     * as-is; an object through its JSON-visible state (the same view the
-     * wire encoding would take anyway). Anything else is a handler bug -
-     * thrown as a plain RuntimeException so WorkerRunner reports it as
-     * handler_failed, not invalid_payload.
-     *
-     * @return array<string, mixed>
+     * The Response for whatever the handler returned: one it built itself is
+     * used as-is (the only form that can carry a deliberate failure), an
+     * array or DTO becomes a successful response around it. Anything else is
+     * a handler bug - thrown as a plain RuntimeException so WorkerRunner
+     * reports it as handler_failed, not invalid_payload.
      */
-    private static function normalize(mixed $result): array
+    private static function normalize(mixed $result): Response
     {
-        if (is_array($result)) {
+        if ($result instanceof Response) {
             return $result;
         }
 
-        if (is_object($result)) {
-            $decoded = json_decode(json_encode($result, JSON_THROW_ON_ERROR), true, 512, JSON_THROW_ON_ERROR);
-
-            if (!is_array($decoded)) {
-                throw new \RuntimeException(sprintf('%s does not expose any JSON-visible state to respond with', $result::class));
-            }
-
-            return $decoded;
+        if (is_array($result) || is_object($result)) {
+            return Response::of($result);
         }
 
-        throw new \RuntimeException(sprintf('Handler must return an array or an object, got %s', get_debug_type($result)));
+        throw new \RuntimeException(sprintf('Handler must return a Response, an array, or an object, got %s', get_debug_type($result)));
     }
 }

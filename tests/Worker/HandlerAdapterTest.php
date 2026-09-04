@@ -7,6 +7,7 @@ namespace App\Tests\Worker;
 use App\Worker\HandlerAdapter;
 use App\Worker\PayloadHydrationException;
 use App\Worker\Request;
+use App\Worker\Response;
 use PHPUnit\Framework\TestCase;
 
 final class HandlerAdapterTest extends TestCase
@@ -17,7 +18,7 @@ final class HandlerAdapterTest extends TestCase
 
         $this->assertSame(
             ['seen' => ['x' => 1, 'extra' => 'kept']],
-            $adapted(['x' => 1, 'extra' => 'kept'])
+            $adapted(['x' => 1, 'extra' => 'kept'])->payload
         );
     }
 
@@ -25,7 +26,7 @@ final class HandlerAdapterTest extends TestCase
     {
         $adapted = HandlerAdapter::adapt(static fn ($payload): array => ['seen' => $payload]);
 
-        $this->assertSame(['seen' => ['x' => 1]], $adapted(['x' => 1]));
+        $this->assertSame(['seen' => ['x' => 1]], $adapted(['x' => 1])->payload);
     }
 
     public function testDtoTypedHandlerGetsTheHydratedObject(): void
@@ -38,7 +39,7 @@ final class HandlerAdapterTest extends TestCase
         // ignored rather than rejected.
         $this->assertSame(
             ['id' => 7, 'note' => 'none'],
-            $adapted(['id' => 7, 'extra' => 'ignored'])
+            $adapted(['id' => 7, 'extra' => 'ignored'])->payload
         );
     }
 
@@ -53,7 +54,7 @@ final class HandlerAdapterTest extends TestCase
             'order' => ['id' => 42],
         ]);
 
-        $this->assertSame(['who' => 'alice', 'order' => 42], $result);
+        $this->assertSame(['who' => 'alice', 'order' => 42], $result->payload);
     }
 
     public function testMissingRequiredKeyThrowsPayloadHydration(): void
@@ -79,7 +80,7 @@ final class HandlerAdapterTest extends TestCase
     {
         $adapted = HandlerAdapter::adapt(static fn (array $payload): OrderDto => new OrderDto(3, 'shipped'));
 
-        $this->assertSame(['id' => 3, 'note' => 'shipped'], $adapted([]));
+        $this->assertSame(['id' => 3, 'note' => 'shipped'], $adapted([])->payload);
     }
 
     /**
@@ -99,11 +100,11 @@ final class HandlerAdapterTest extends TestCase
 
         $this->assertSame(
             ['id' => 7, 'note' => 'rush'],
-            $adapted(['action' => 'order', 'params' => ['id' => 7, 'note' => 'rush']])
+            $adapted(['action' => 'order', 'params' => ['id' => 7, 'note' => 'rush']])->payload
         );
 
         // Unknown action - the envelope's own defaults keep this well-formed.
-        $this->assertSame([], $adapted(['action' => 'nope', 'params' => []]));
+        $this->assertSame([], $adapted(['action' => 'nope', 'params' => []])->payload);
     }
 
     /**
@@ -128,6 +129,35 @@ final class HandlerAdapterTest extends TestCase
     private static function describeOrder(OrderDto $order): array
     {
         return ['id' => $order->id, 'note' => $order->note];
+    }
+
+    /**
+     * A Response the handler built is passed through untouched - it's the
+     * only return form that can express a deliberate failure, which a bare
+     * array or DTO cannot (those are always a success).
+     */
+    public function testReturnedResponseIsUsedAsIs(): void
+    {
+        $ok = HandlerAdapter::adapt(static fn (array $payload): Response => new Response(['pong' => true]));
+
+        $this->assertTrue($ok([])->successful);
+        $this->assertSame(['pong' => true], $ok([])->payload);
+
+        $failed = HandlerAdapter::adapt(
+            static fn (array $payload): Response => Response::error('unknown_action', ['action' => 'nope'])
+        );
+
+        $this->assertFalse($failed([])->successful);
+        $this->assertSame(['error' => 'unknown_action', 'action' => 'nope'], $failed([])->payload);
+    }
+
+    public function testBareArrayOrDtoReturnIsAlwaysASuccessfulResponse(): void
+    {
+        $fromArray = HandlerAdapter::adapt(static fn (array $payload): array => ['x' => 1]);
+        $fromDto = HandlerAdapter::adapt(static fn (array $payload): OrderDto => new OrderDto(1));
+
+        $this->assertTrue($fromArray([])->successful);
+        $this->assertTrue($fromDto([])->successful);
     }
 
     public function testScalarReturnIsAHandlerBugNotAPayloadProblem(): void

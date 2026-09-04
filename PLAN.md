@@ -1923,8 +1923,24 @@ own DTO - so every action stays an ordinary typed function
 deserialization at both ends. A hydration failure inside the handler is
 classified by exception type, not by where it was thrown, so a params
 payload that doesn't fit the ACTION's DTO is still `invalid_payload`.
-Covered by `HandlerAdapterTest` (including the envelope-routing pattern)
-and `PersistentWorkerTest::testDtoTypedHandlerGetsHydratedPayloadAndBadPayloadIsRejected`.
+
+**`Worker\Response`, the outbound counterpart:** a handler may return a bare
+array or DTO (always a success - the runtime wraps it), or a `Response` it
+built itself. The latter is what makes the FAILURE case expressible:
+`Response::error('unknown_action')` answers with an ERROR message carrying a
+code the application chose, which `WorkerPoolClient` turns back into a
+`ServerErrorException` whose `->error` is that same code - previously a
+handler could only fail by throwing, which reports `handler_failed` and says
+nothing about what was wrong. `Response::of($dto)` builds the success case
+from a result DTO. `$successful` is a bool rather than a `MessageType`:
+application code shouldn't need the wire protocol's vocabulary, and
+`WorkerRunner` stays the single place that turns a Response into a message
+(always under the request's own correlation id, so a handler can't break
+routing). WorkerRunner's own failure replies (`invalid_payload`,
+`handler_failed`) go through the same type. Covered by `HandlerAdapterTest`
+(pass-through, envelope routing, bare-return-is-success) and
+`PersistentWorkerTest::testHandlerReturnedErrorResponseBecomesAnErrorMessage`
+plus `testDtoTypedHandlerGetsHydratedPayloadAndBadPayloadIsRejected`.
 
 ---
 

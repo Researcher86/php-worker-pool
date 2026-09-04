@@ -7,6 +7,8 @@ namespace App\Tests\Worker;
 use App\IPC\SocketPair;
 use App\Protocol\Message;
 use App\Protocol\MessageType;
+use App\Worker\Request;
+use App\Worker\Response;
 use App\Worker\WorkerRunner;
 use PHPUnit\Framework\TestCase;
 
@@ -162,6 +164,56 @@ final class PersistentWorkerTest extends TestCase
         // The same worker is still alive and serving.
         $master->write(new Message(MessageType::REQUEST, 'sum-3', ['a' => 1, 'b' => 2]));
         $this->assertSame(['result' => 3], $master->read()[0]->payload);
+
+        $master->write(new Message(MessageType::SHUTDOWN, 'shutdown-1'));
+        $master->close();
+
+        pcntl_waitpid($pid, $status);
+        $this->assertTrue(pcntl_wifexited($status));
+    }
+
+    /**
+     * A handler that returns Response::error() answers with an ERROR message
+     * carrying the code IT chose - the deliberate-failure path, as opposed to
+     * throwing (handler_failed) or a payload that doesn't fit
+     * (invalid_payload). The worker keeps serving afterwards either way.
+     */
+    public function testHandlerReturnedErrorResponseBecomesAnErrorMessage(): void
+    {
+        $pair = new SocketPair();
+
+        $pid = pcntl_fork();
+        $this->assertNotSame(-1, $pid, 'fork failed');
+
+        if ($pid === 0) {
+            $pair->closeMaster();
+
+            $handler = static fn (Request $request): Response => match ($request->action) {
+                'ping' => new Response(['pong' => true]),
+                default => Response::error('unknown_action'),
+            };
+
+            (new WorkerRunner($pair->getWorkerSocket(), $handler))->run();
+
+            exit(0);
+        }
+
+        $pair->closeWorker();
+        $master = $pair->getMasterSocket();
+
+        $master->write(new Message(MessageType::REQUEST, 'act-1', ['action' => 'nope']));
+
+        $error = $master->read()[0];
+        $this->assertSame(MessageType::ERROR, $error->type);
+        $this->assertSame('act-1', $error->id);
+        $this->assertSame(['error' => 'unknown_action'], $error->payload);
+
+        // A known action on the same worker still answers normally.
+        $master->write(new Message(MessageType::REQUEST, 'act-2', ['action' => 'ping']));
+
+        $response = $master->read()[0];
+        $this->assertSame(MessageType::RESPONSE, $response->type);
+        $this->assertSame(['pong' => true], $response->payload);
 
         $master->write(new Message(MessageType::SHUTDOWN, 'shutdown-1'));
         $master->close();
