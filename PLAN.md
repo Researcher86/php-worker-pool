@@ -1890,57 +1890,69 @@ itself:
 
 `WorkerRunner` no longer hardcodes what requests DO. The `calculate` route
 (added back in Phase 12) lived inside the runtime; it now lives in
-`bin/server.php`, passed into `Master` as an application handler - a
-`payload in -> payload out` closure that `ForkedWorkerLauncher` hands each
-forked worker (fork() copies parent memory, so it reaches replacements and
-scale-ups forked long after startup too). The runtime keeps everything
-protocol-shaped: the response reuses the request's correlation id and the
-RESPONSE/ERROR envelope (including handler_failed when the handler throws)
-is applied by `WorkerRunner` itself, so an application handler cannot break
-routing no matter what it returns or throws. With no handler configured,
-`WorkerRunner` falls back to echoing the payload - the behavior the
-protocol-level tests rely on.
+`bin/server.php`, passed into `Master` as an application handler that
+`ForkedWorkerLauncher` hands each forked worker (fork() copies parent
+memory, so it reaches replacements and scale-ups forked long after startup
+too).
 
-**Typed handler payloads (follow-up):** the handler declares the payload
-shape it wants in its own signature. `HandlerAdapter` reflects it once at
-worker startup: an `array` (or untyped) parameter gets the raw payload
-as-is; a DTO class parameter gets the payload hydrated into it through its
-constructor - payload keys matched to parameter names, extra keys ignored,
+**The handler contract is fixed: `Request in, Response out`.** No signature
+reflection, no alternative shapes - the runtime hydrates every request
+payload into the `Request` envelope (`action` + `params`, what
+`WorkerPoolClient::call()` sends) before the call, and the handler answers
+with a `Response`:
+
+```php
+$handler = static function (Request $request): Response {
+    return match ($request->action) {
+        'calculate' => Response::of(calculate(PayloadHydrator::hydrate(CalculateRequest::class, $request->params))),
+        default => Response::error('unknown_action'),
+    };
+};
+```
+
+An earlier iteration let the handler declare whatever parameter type it
+liked and had a `HandlerAdapter` reflect the signature at worker startup to
+decide what to pass (raw array vs. hydrated DTO) and how to interpret what
+came back (array, DTO, or Response). It worked, but it meant the runtime's
+central contract could only be understood by reading the reflection rules -
+three input shapes and three output shapes, all implicit. One fixed
+signature says the same thing in the type declaration itself, and
+`HandlerAdapter` collapsed into `PayloadHydrator`, which now does exactly
+one thing.
+
+**`PayloadHydrator`** builds a DTO from a payload array via its
+constructor: payload keys matched to parameter names, extra keys ignored,
 absent optional parameters falling back to defaults, class-typed parameters
-hydrated recursively from nested arrays. Symmetrically, the handler may
-return a DTO - its JSON-visible state becomes the response payload. A
-payload that doesn't fit the declared DTO (missing required key, wrong
-type) is answered as `invalid_payload` WITHOUT the handler running -
-distinct from `handler_failed` (the handler itself throwing), so the client
-knows which side to fix.
+hydrated recursively from nested arrays. It runs twice per request in the
+routing pattern above - once by `WorkerRunner` for the envelope, once by the
+handler for the matched action's own DTO - so each action stays an ordinary
+typed function (`calculate(CalculateRequest): CalculateResult`). A payload
+that doesn't fit throws `PayloadHydrationException`, answered as
+`invalid_payload`, classified by exception type rather than by where it was
+thrown - so an envelope mismatch and an action-DTO mismatch look the same to
+a client, and both stay distinct from `handler_failed` (the handler itself
+throwing).
 
-`HandlerAdapter::hydrate()` is public for the routing case, which is what
-bin/server.php demonstrates: the handler declares `Worker\Request` (the
-conventional `action` + `params` envelope WorkerPoolClient::call() sends),
-matches on the action, and hydrates `$request->params` into that action's
-own DTO - so every action stays an ordinary typed function
-(`calculate(CalculateRequest): CalculateResult`) with the runtime doing the
-deserialization at both ends. A hydration failure inside the handler is
-classified by exception type, not by where it was thrown, so a params
-payload that doesn't fit the ACTION's DTO is still `invalid_payload`.
+**`Worker\Response`** is the outbound counterpart. `Response::of($dto)`
+turns a result DTO's JSON-visible state into the response payload;
+`new Response([...])` takes a payload directly; `Response::error('unknown_action')`
+answers with an ERROR message carrying a code the application chose, which
+`WorkerPoolClient` turns back into a `ServerErrorException` whose `->error`
+is that same code - previously a handler could only fail by throwing, which
+reports `handler_failed` and says nothing about what was wrong.
+`$successful` is a bool rather than a `MessageType`: application code
+shouldn't need the wire protocol's vocabulary, and `WorkerRunner` stays the
+single place that turns a Response into a message, always under the
+request's own correlation id, so a handler can't break routing. Its own
+failure replies go through the same type. A handler that skips its return
+type and hands back something else hits PHP's parameter check inside
+`WorkerRunner`'s try - reported as `handler_failed`, worker still alive
+(verified live).
 
-**`Worker\Response`, the outbound counterpart:** a handler may return a bare
-array or DTO (always a success - the runtime wraps it), or a `Response` it
-built itself. The latter is what makes the FAILURE case expressible:
-`Response::error('unknown_action')` answers with an ERROR message carrying a
-code the application chose, which `WorkerPoolClient` turns back into a
-`ServerErrorException` whose `->error` is that same code - previously a
-handler could only fail by throwing, which reports `handler_failed` and says
-nothing about what was wrong. `Response::of($dto)` builds the success case
-from a result DTO. `$successful` is a bool rather than a `MessageType`:
-application code shouldn't need the wire protocol's vocabulary, and
-`WorkerRunner` stays the single place that turns a Response into a message
-(always under the request's own correlation id, so a handler can't break
-routing). WorkerRunner's own failure replies (`invalid_payload`,
-`handler_failed`) go through the same type. Covered by `HandlerAdapterTest`
-(pass-through, envelope routing, bare-return-is-success) and
-`PersistentWorkerTest::testHandlerReturnedErrorResponseBecomesAnErrorMessage`
-plus `testDtoTypedHandlerGetsHydratedPayloadAndBadPayloadIsRejected`.
+Covered by `PayloadHydratorTest` (hydration rules, the envelope, rejections)
+and `PersistentWorkerTest` (`testPerActionDtoIsHydratedFromParamsAndABadPayloadIsRejected`,
+`testHandlerReturnedErrorResponseBecomesAnErrorMessage`,
+`testHandlerFailureAnswersWithAnErrorAndTheWorkerSurvives`).
 
 ---
 
@@ -2122,7 +2134,11 @@ src/
 │   ├── WorkerCrash.php
 │   ├── WorkerLauncher.php
 │   ├── ForkedWorkerLauncher.php
-│   └── Autoscaler.php
+│   ├── Autoscaler.php
+│   ├── Request.php
+│   ├── Response.php
+│   ├── PayloadHydrator.php
+│   └── PayloadHydrationException.php
 │
 ├── Protocol/
 │   ├── Message.php

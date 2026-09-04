@@ -7,6 +7,7 @@ namespace App\Tests\Worker;
 use App\IPC\SocketPair;
 use App\Protocol\Message;
 use App\Protocol\MessageType;
+use App\Worker\PayloadHydrator;
 use App\Worker\Request;
 use App\Worker\Response;
 use App\Worker\WorkerRunner;
@@ -77,9 +78,9 @@ final class PersistentWorkerTest extends TestCase
         if ($pid === 0) {
             $pair->closeMaster();
 
-            $calculate = static fn (array $payload): array => [
-                'result' => $payload['params']['a'] + $payload['params']['b'],
-            ];
+            $calculate = static fn (Request $request): Response => Response::of([
+                'result' => $request->params['a'] + $request->params['b'],
+            ]);
 
             (new WorkerRunner($pair->getWorkerSocket(), $calculate))->run();
 
@@ -118,13 +119,14 @@ final class PersistentWorkerTest extends TestCase
     }
 
     /**
-     * The full typed-handler path through a real worker process: the handler
-     * declares a DTO parameter, the runtime hydrates each request's payload
-     * into it before the call (HandlerAdapter), and a payload that doesn't
-     * fit is answered with invalid_payload - distinct from handler_failed,
-     * and without the handler ever running or the worker dying.
+     * The full per-action DTO path through a real worker process, exactly as
+     * bin/server.php wires it: the handler takes the Request envelope,
+     * hydrates $request->params into the action's own DTO, and answers with
+     * a Response. A params payload that doesn't fit that DTO comes back as
+     * invalid_payload - distinct from handler_failed, and without the action
+     * ever running or the worker dying.
      */
-    public function testDtoTypedHandlerGetsHydratedPayloadAndBadPayloadIsRejected(): void
+    public function testPerActionDtoIsHydratedFromParamsAndABadPayloadIsRejected(): void
     {
         $pair = new SocketPair();
 
@@ -134,9 +136,11 @@ final class PersistentWorkerTest extends TestCase
         if ($pid === 0) {
             $pair->closeMaster();
 
-            $handler = static fn (SumRequest $request): array => [
-                'result' => $request->a + $request->b,
-            ];
+            $handler = static function (Request $request): Response {
+                $sum = PayloadHydrator::hydrate(SumRequest::class, $request->params);
+
+                return Response::of(['result' => $sum->a + $sum->b]);
+            };
 
             (new WorkerRunner($pair->getWorkerSocket(), $handler))->run();
 
@@ -146,15 +150,21 @@ final class PersistentWorkerTest extends TestCase
         $pair->closeWorker();
         $master = $pair->getMasterSocket();
 
-        // Hydrates into SumRequest(a: 10, b: 20) - 'extra' is ignored.
-        $master->write(new Message(MessageType::REQUEST, 'sum-1', ['a' => 10, 'b' => 20, 'extra' => true]));
+        // params hydrate into SumRequest(a: 10, b: 20) - 'extra' is ignored.
+        $master->write(new Message(MessageType::REQUEST, 'sum-1', [
+            'action' => 'sum',
+            'params' => ['a' => 10, 'b' => 20, 'extra' => true],
+        ]));
 
         $response = $master->read()[0];
         $this->assertSame(MessageType::RESPONSE, $response->type);
         $this->assertSame(['result' => 30], $response->payload);
 
-        // Missing required 'b' - rejected before the handler runs.
-        $master->write(new Message(MessageType::REQUEST, 'sum-2', ['a' => 10]));
+        // Missing required 'b' - rejected before the action runs.
+        $master->write(new Message(MessageType::REQUEST, 'sum-2', [
+            'action' => 'sum',
+            'params' => ['a' => 10],
+        ]));
 
         $error = $master->read()[0];
         $this->assertSame(MessageType::ERROR, $error->type);
@@ -162,7 +172,10 @@ final class PersistentWorkerTest extends TestCase
         $this->assertSame(['error' => 'invalid_payload'], $error->payload);
 
         // The same worker is still alive and serving.
-        $master->write(new Message(MessageType::REQUEST, 'sum-3', ['a' => 1, 'b' => 2]));
+        $master->write(new Message(MessageType::REQUEST, 'sum-3', [
+            'action' => 'sum',
+            'params' => ['a' => 1, 'b' => 2],
+        ]));
         $this->assertSame(['result' => 3], $master->read()[0]->payload);
 
         $master->write(new Message(MessageType::SHUTDOWN, 'shutdown-1'));

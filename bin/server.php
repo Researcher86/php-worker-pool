@@ -1,7 +1,9 @@
 <?php
 
+declare(strict_types=1);
+
 use App\Master\Master;
-use App\Worker\HandlerAdapter;
+use App\Worker\PayloadHydrator;
 use App\Worker\Request;
 use App\Worker\Response;
 
@@ -51,7 +53,7 @@ function calculate(CalculateRequest $request): CalculateResult
 // fork() copies memory.
 $handler = static function (Request $request): Response {
     return match ($request->action) {
-        'calculate' => Response::of(calculate(HandlerAdapter::hydrate(CalculateRequest::class, $request->params))),
+        'calculate' => Response::of(calculate(PayloadHydrator::hydrate(CalculateRequest::class, $request->params))),
         // An unrecognized action is a real failure, not an empty answer: the
         // client gets an ERROR and the SDK throws ServerErrorException whose
         // ->error is exactly this code.

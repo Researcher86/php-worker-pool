@@ -76,12 +76,11 @@ final class Master
         private readonly float $gracefulShutdownTimeoutSeconds = 30.0,
         private readonly Logger $logger = new StderrLogger(),
         private readonly Clock $clock = new SystemClock(),
-        // The application's request handler, run inside each worker: payload
-        // of a REQUEST in, response payload out - a
-        // \Closure(array<string, mixed>): array<string, mixed>. This is
-        // where business logic enters the system - defined wherever the
-        // server is configured (bin/server.php), never inside the runtime.
-        // Null falls back to WorkerRunner's echo default.
+        // The application's request handler, run inside each worker:
+        // \Closure(Worker\Request): Worker\Response. This is where business
+        // logic enters the system - defined wherever the server is
+        // configured (bin/server.php), never inside the runtime. Null falls
+        // back to WorkerRunner's echo default.
         private readonly ?\Closure $handler = null,
     ) {
     }

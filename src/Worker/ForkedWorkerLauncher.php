@@ -10,15 +10,15 @@ use App\IPC\SocketPair;
  * The real WorkerLauncher: forks an OS child process that runs the worker
  * loop forever.
  *
- * $handler is the application's request handler for WorkerRunner (payload
- * in, payload out; null = WorkerRunner's echo default). fork() copies the
+ * $handler is the application's request handler for WorkerRunner (Request
+ * in, Response out; null = WorkerRunner's echo default). fork() copies the
  * parent's memory, so a closure defined at server-configuration level (see
  * bin/server.php) reaches every worker - including replacements and
  * scale-ups forked long after startup - without any serialization.
  */
 final class ForkedWorkerLauncher implements WorkerLauncher
 {
-    /** @param \Closure(array<string, mixed>): array<string, mixed>|null $handler */
+    /** @param \Closure(Request): Response|null $handler */
     public function __construct(
         private readonly ?\Closure $handler = null,
     ) {
