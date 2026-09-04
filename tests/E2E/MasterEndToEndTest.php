@@ -46,6 +46,19 @@ final class MasterEndToEndTest extends TestCase
                 $client->call(new Request('calculate', new CalculateRequest(3, 4)))
             );
 
+            // Three requests in flight at once over one connection, against
+            // real forked workers answering in whatever order they finish.
+            $pending = [
+                $client->send(new Request('calculate', new CalculateRequest(1, 1))),
+                $client->send(new Request('calculate', new CalculateRequest(2, 2))),
+                $client->send(new Request('calculate', new CalculateRequest(3, 3))),
+            ];
+
+            $this->assertSame(
+                [['result' => 2], ['result' => 4], ['result' => 6]],
+                $client->all(...$pending)
+            );
+
             proc_terminate($process, SIGTERM);
 
             $this->assertTrue($this->waitForExit($process, 15.0), 'server did not exit after SIGTERM');

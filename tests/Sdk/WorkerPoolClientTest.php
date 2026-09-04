@@ -49,6 +49,39 @@ final class WorkerPoolClientTest extends TestCase
         return $pid;
     }
 
+    /**
+     * Forks a server that reads $count requests off ONE connection before
+     * answering any of them, then hands them all to $respond at once - the
+     * multiplexing case: nothing can be answered in arrival order by
+     * accident, because nothing is answered until every request is in.
+     *
+     * @param \Closure(Socket, list<Message>): void $respond
+     */
+    private function forkPipeliningServer(int $count, \Closure $respond): int
+    {
+        $pid = pcntl_fork();
+        $this->assertNotSame(-1, $pid, 'fork failed');
+
+        if ($pid === 0) {
+            $listener = stream_socket_server('unix://' . $this->path);
+            $connection = stream_socket_accept($listener, 10);
+            $socket = new Socket($connection);
+
+            $requests = [];
+            while (count($requests) < $count) {
+                $requests = [...$requests, ...$socket->read()];
+            }
+
+            $respond($socket, $requests);
+
+            exit(0);
+        }
+
+        $this->waitUntilListening();
+
+        return $pid;
+    }
+
     private function waitUntilListening(): void
     {
         // Not a connect-and-disconnect probe on purpose: stream_socket_accept()
@@ -153,6 +186,108 @@ final class WorkerPoolClientTest extends TestCase
             'action' => 'calculate',
             'params' => ['a' => 10, 'b' => 20],
         ], $response);
+
+        pcntl_waitpid($pid, $status);
+    }
+
+    /**
+     * PLAN.md Phase 18's client half: send() puts a request on the wire and
+     * returns immediately, so several can be in flight at once, and all()
+     * collects them. The forked server here reads all three BEFORE answering
+     * any, which only works because the client didn't block on the first.
+     */
+    public function testSendPutsSeveralRequestsInFlightAndAllCollectsThem(): void
+    {
+        $pid = $this->forkPipeliningServer(3, function (Socket $socket, array $requests): void {
+            // Answer in reverse, so arrival order can't match asking order.
+            foreach (array_reverse($requests) as $i => $request) {
+                $socket->write(new Message(MessageType::RESPONSE, $request->id, ['n' => $request->payload['params']['n']]));
+            }
+        });
+
+        $client = new WorkerPoolClient($this->path);
+
+        $first = $client->send(new Request('calculate', ['n' => 1]));
+        $second = $client->send(new Request('calculate', ['n' => 2]));
+        $third = $client->send(new Request('calculate', ['n' => 3]));
+
+        // Ordered by the handles given, not by when each answer arrived.
+        $this->assertSame(
+            [['n' => 1], ['n' => 2], ['n' => 3]],
+            $client->all($first, $second, $third)
+        );
+
+        pcntl_waitpid($pid, $status);
+    }
+
+    /**
+     * The handle can also be awaited on its own, in whatever order suits the
+     * caller - answers nobody has asked for yet are buffered until they are.
+     */
+    public function testHandlesCanBeAwaitedIndividuallyInAnyOrder(): void
+    {
+        $pid = $this->forkPipeliningServer(2, function (Socket $socket, array $requests): void {
+            foreach ($requests as $request) {
+                $socket->write(new Message(MessageType::RESPONSE, $request->id, ['n' => $request->payload['params']['n']]));
+            }
+        });
+
+        $client = new WorkerPoolClient($this->path);
+
+        $first = $client->send(new Request('calculate', ['n' => 1]));
+        $second = $client->send(new Request('calculate', ['n' => 2]));
+
+        // Second first: the answer to $first arrives during this wait and is
+        // buffered rather than mistaken for this one's.
+        $this->assertSame(['n' => 2], $second->await());
+        $this->assertSame(['n' => 1], $first->await());
+
+        pcntl_waitpid($pid, $status);
+    }
+
+    /** A handle is one-shot - collecting it twice is a caller bug, not a silent reblock. */
+    public function testAwaitingTheSameHandleTwiceThrows(): void
+    {
+        $pid = $this->forkServer(function (Socket $socket, Message $request): void {
+            $socket->write(new Message(MessageType::RESPONSE, $request->id, ['result' => 30]));
+        });
+
+        $client = new WorkerPoolClient($this->path);
+        $pending = $client->send(new Request('calculate', ['a' => 10, 'b' => 20]));
+
+        $this->assertSame(['result' => 30], $pending->await());
+
+        $this->expectException(\LogicException::class);
+
+        $pending->await();
+
+        pcntl_waitpid($pid, $status);
+    }
+
+    /**
+     * One failed request among several must surface as its own error when
+     * that handle is collected - not corrupt or swallow the others.
+     */
+    public function testAFailedRequestAmongSeveralThrowsOnlyForItsOwnHandle(): void
+    {
+        $pid = $this->forkPipeliningServer(2, function (Socket $socket, array $requests): void {
+            $socket->write(new Message(MessageType::ERROR, $requests[0]->id, ['error' => 'unknown_action']));
+            $socket->write(new Message(MessageType::RESPONSE, $requests[1]->id, ['ok' => true]));
+        });
+
+        $client = new WorkerPoolClient($this->path);
+
+        $failing = $client->send(new Request('nope'));
+        $working = $client->send(new Request('calculate', ['a' => 1, 'b' => 2]));
+
+        try {
+            $failing->await();
+            $this->fail('the failed request must throw when collected');
+        } catch (ServerErrorException $e) {
+            $this->assertSame('unknown_action', $e->error);
+        }
+
+        $this->assertSame(['ok' => true], $working->await(), 'the other request must be unaffected');
 
         pcntl_waitpid($pid, $status);
     }

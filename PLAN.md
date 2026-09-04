@@ -1539,10 +1539,10 @@ response still lands on its own original id) and a live run against a real
 server (one real connection, three requests, real workers finishing them
 out of order, each response still correctly matched back).
 
-The "Future Client API" (`$client->send()->await()`) is explicitly this
-phase's own forward-looking sketch, not part of its Definition of Done -
-WorkerPoolClient (Phase 12) stays a synchronous one-request-per-connection
-client; nothing about that needed to change for this phase.
+The "Future Client API" (`$client->send()->await()`) was explicitly this
+phase's forward-looking sketch rather than part of its Definition of Done,
+and WorkerPoolClient stayed synchronous at the time. It exists now - see
+"Client-side multiplexing" below.
 
 ---
 
@@ -1966,6 +1966,54 @@ and `PersistentWorkerTest` (`testPerActionDtoIsHydratedFromParamsAndABadPayloadI
 
 ---
 
+# Post-Phase-20: Client-Side Multiplexing
+
+Phase 18 gave the Master multiplexing and left the client synchronous. The
+client half exists now, over one connection opened on first use and reused:
+
+```php
+$a = $client->send(new Request('calculate', new CalculateRequest(a: 10, b: 20)));
+$b = $client->send(new Request('calculate', new CalculateRequest(a: 30, b: 40)));
+$c = $client->send(new Request('calculate', new CalculateRequest(a: 50, b: 60)));
+
+[$first, $second, $third] = $client->all($a, $b, $c);
+```
+
+`send()` writes the request and returns a `PendingResponse` handle
+immediately; `await()` (on the handle or the client) and `all()` are where
+this process blocks. `call()` is now just send-then-await, so the
+single-request path is unchanged for callers.
+
+Nothing runs in the background and no callback ever fires - the handle is a
+claim ticket, not a promise. What it buys is overlap: with `call()` the pool
+starts request N+1 only after this process has read answer N. Measured
+against a real server with three workers and a handler sleeping 0.5s:
+**0.51s for three sends collected together, 1.50s for the same three
+call()s** - the difference the Master's multiplexing was always capable of
+and the client couldn't use.
+
+Details worth knowing:
+- Answers are matched by correlation id and buffered, so they may arrive in
+  any order; `all()` returns payloads in the order the handles were passed.
+- Each request's timeout runs from when IT was sent, not from when it is
+  awaited. A late answer to a request already timed out is discarded, not
+  mistaken for another's.
+- One failure among several surfaces only on its own handle
+  (`ServerErrorException`); the others are unaffected. `all()` throws on the
+  first failure, since whoever asked for all of them asked for all to
+  succeed - await individually when partial results are worth having.
+- A handle is one-shot: collecting it twice throws `LogicException` rather
+  than blocking forever.
+- A dropped connection clears everything in flight (nothing pending could
+  ever arrive) and the next `send()` reconnects.
+
+Covered by `WorkerPoolClientTest` (a forked server that reads every request
+before answering any - only possible if the client didn't block on the
+first - plus out-of-order collection, error isolation, and double-await) and
+`MasterEndToEndTest` against the real server.
+
+---
+
 # Recommended Implementation Order
 
 ## MVP
@@ -2183,6 +2231,7 @@ src/
 │
 ├── Sdk/
 │   ├── WorkerPoolClient.php
+│   ├── PendingResponse.php
 │   ├── ConnectionFailedException.php
 │   ├── RequestTimedOutException.php
 │   └── ServerErrorException.php

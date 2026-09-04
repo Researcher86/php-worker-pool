@@ -8,7 +8,7 @@ use App\Sdk\WorkerPoolClient;
 
 require __DIR__ . '/../vendor/autoload.php';
 
-// Both ends of this call share App\Contract\Calculate - that's what the
+// Both ends of these calls share App\Contract\Calculate - that's what the
 // namespace is for: the caller builds the very CalculateRequest the worker
 // hydrates, so a wrong field name or type is a static error here rather
 // than an invalid_payload at runtime, and the two can never drift apart.
@@ -19,6 +19,13 @@ require __DIR__ . '/../vendor/autoload.php';
 // only needs to match that.
 $client = new WorkerPoolClient('/tmp/php-worker-pool.sock');
 
-$response = $client->call(new Request('calculate', new CalculateRequest(a: 10, b: 20)));
+// send() writes each request out and returns straight away, so all three
+// are in the pool at once - on a pool with spare workers they run in
+// parallel instead of one after another. all() is where this process
+// blocks, collecting the answers in the order asked for however they come
+// back. Use call() instead when there's only one request to make.
+$response1 = $client->send(new Request('calculate', new CalculateRequest(a: 10, b: 20)));
+$response2 = $client->send(new Request('calculate', new CalculateRequest(a: 30, b: 40)));
+$response3 = $client->send(new Request('calculate', new CalculateRequest(a: 50, b: 60)));
 
-echo json_encode($response) . "\n";
+echo json_encode($client->all($response1, $response2, $response3)) . "\n";
