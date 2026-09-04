@@ -738,208 +738,220 @@ php-worker-pool/
 
 ## Phase 1 — IPC Foundation
 
-* [ ] Create socket pair
-* [ ] Fork Worker process
-* [ ] Send messages from Master to Worker
-* [ ] Send responses from Worker to Master
+* [x] Create socket pair
+* [x] Fork Worker process
+* [x] Send messages from Master to Worker
+* [x] Send responses from Worker to Master
 
 ---
 
 ## Phase 2 — Persistent Worker
 
-* [ ] Create Worker loop
-* [ ] Process multiple requests
-* [ ] Return responses
-* [ ] Support Worker shutdown
+* [x] Create Worker loop
+* [x] Process multiple requests
+* [x] Return responses
+* [x] Support Worker shutdown
 
 ---
 
 ## Phase 3 — Message Protocol
 
-* [ ] Implement Message abstraction
-* [ ] Implement Encoder
-* [ ] Implement Decoder
-* [ ] Implement length-prefixed protocol
-* [ ] Support partial reads
-* [ ] Support multiple messages
+* [x] Implement Message abstraction
+* [x] Implement Encoder
+* [x] Implement Decoder
+* [x] Implement length-prefixed protocol
+* [x] Support partial reads
+* [x] Support multiple messages
 
 ---
 
 ## Phase 4 — Worker Process
 
-* [ ] Create WorkerProcess abstraction
-* [ ] Track Worker PID
-* [ ] Track Worker state
-* [ ] Track current request
+* [x] Create WorkerProcess abstraction
+* [x] Track Worker PID
+* [x] Track Worker state
+* [x] Track current request
 
 ---
 
 ## Phase 5 — Worker Pool
 
-* [ ] Start multiple Workers
-* [ ] Manage Worker registry
-* [ ] Find idle Workers
-* [ ] Track busy Workers
+* [x] Start multiple Workers
+* [x] Manage Worker registry
+* [x] Find idle Workers
+* [x] Track busy Workers
 
 ---
 
 ## Phase 6 — Request Queue
 
-* [ ] Implement RequestQueue
-* [ ] Queue requests when Workers are busy
-* [ ] Dispatch queued requests
+* [x] Implement RequestQueue
+* [x] Queue requests when Workers are busy
+* [x] Dispatch queued requests
 
 ---
 
 ## Phase 7 — Dispatcher
 
-* [ ] Connect Queue and Worker Pool
-* [ ] Dispatch requests to idle Workers
-* [ ] Dispatch automatically after Worker completion
+* [x] Connect Queue and Worker Pool
+* [x] Dispatch requests to idle Workers
+* [x] Dispatch automatically after Worker completion
 
 ---
 
 ## Phase 8 — Async Event Loop
 
-* [ ] Implement Event Loop
-* [ ] Use `stream_select()`
-* [ ] Handle server socket
-* [ ] Handle client sockets
-* [ ] Handle Worker IPC sockets
+* [x] Implement Event Loop
+* [x] Use `stream_select()`
+* [x] Handle server socket
+* [x] Handle client sockets
+* [x] Handle Worker IPC sockets
 
 ---
 
 ## Phase 9 — Unix Domain Socket Server
 
-* [ ] Create Unix Domain Socket server
-* [ ] Accept external clients
-* [ ] Handle multiple client connections
+* [x] Create Unix Domain Socket server
+* [x] Accept external clients
+* [x] Handle multiple client connections
 
 ---
 
 ## Phase 10 — Client Connections
 
-* [ ] Create ClientConnection abstraction
-* [ ] Handle read buffers
-* [ ] Handle write buffers
-* [ ] Handle disconnects
+* [x] Create ClientConnection abstraction
+* [x] Handle read buffers
+* [x] Handle write buffers
+* [x] Handle disconnects
 
 ---
 
 ## Phase 11 — Correlation IDs
 
-* [ ] Generate request IDs
-* [ ] Track pending requests
-* [ ] Associate requests with clients
-* [ ] Route responses to the correct client
+* [x] Generate request IDs
+* [x] Track pending requests
+* [x] Associate requests with clients
+* [x] Route responses to the correct client
 
 ---
 
 ## Phase 12 — PHP Client
 
-* [ ] Create WorkerPoolClient
-* [ ] Support PHP-FPM
-* [ ] Support CLI
-* [ ] Support synchronous requests
-* [ ] Handle connection failures
+* [x] Create WorkerPoolClient
+* [x] Support PHP-FPM
+* [x] Support CLI
+* [x] Support synchronous requests
+* [x] Handle connection failures
 
 Example API:
 
 ```php
-$client = new WorkerPoolClient(
-    '/tmp/php-worker-pool.sock'
-);
+$client = new WorkerPoolClient('/tmp/php-worker-pool.sock');
 
 $response = $client->call(
-    'calculate',
-    [
-        'a' => 10,
-        'b' => 20,
-    ]
+    new Request('calculate', new CalculateRequest(a: 10, b: 20))
 );
 ```
+
+`call()` takes the same `Request` envelope the worker's handler receives, so
+both ends speak in the same terms; its params may be a plain array or a DTO.
+A server that answers with an error throws `ServerErrorException` rather
+than returning the error payload as if it were a result.
 
 ---
 
 ## Phase 13 — Backpressure
 
-* [ ] Add maximum queue size
-* [ ] Reject requests when overloaded
-* [ ] Track rejected requests
+* [x] Add maximum queue size
+* [x] Reject requests when overloaded
+* [x] Track rejected requests
 
 ---
 
 ## Phase 14 — Timeouts
 
-* [ ] Add request deadlines
-* [ ] Detect expired requests
-* [ ] Return timeout responses
+* [x] Add request deadlines
+* [x] Detect expired requests
+* [x] Return timeout responses
 
 ---
 
 ## Phase 15 — Worker Recovery
 
-* [ ] Detect Worker crashes
-* [ ] Handle SIGCHLD
-* [ ] Remove dead Workers
-* [ ] Start replacement Workers
+* [x] Detect Worker crashes
+* [x] Handle SIGCHLD
+* [x] Remove dead Workers
+* [x] Start replacement Workers
 
 ---
 
 ## Phase 16 — Graceful Shutdown
 
-* [ ] Handle SIGTERM
-* [ ] Stop accepting new connections
-* [ ] Drain active requests
-* [ ] Shutdown Workers gracefully
-* [ ] Remove Unix socket
+* [x] Handle SIGTERM
+* [x] Stop accepting new connections
+* [x] Drain active requests
+* [x] Shutdown Workers gracefully
+* [x] Remove Unix socket
 
 ---
 
 ## Phase 17 — Metrics
 
-* [ ] Worker metrics
-* [ ] Queue metrics
-* [ ] Request metrics
+* [x] Worker metrics
+* [x] Queue metrics
+* [x] Request metrics
 * [ ] Request duration
 * [ ] Worker processing time
+
+The two timing metrics are deliberately not implemented: both need
+per-request timestamps (queued at, picked up at) that nothing in the
+codebase tracks, and this phase - unlike the others - has no Definition of
+Done requiring them. See PLAN.md Phase 17 for the reasoning.
 
 ---
 
 ## Phase 18 — Request Multiplexing
 
-* [ ] Support multiple requests per connection
-* [ ] Support out-of-order responses
-* [ ] Support multiple pending requests
+* [x] Support multiple requests per connection
+* [x] Support out-of-order responses
+* [x] Support multiple pending requests
 
-Future API:
+Client API (this was a sketch when the phase was written; it exists now):
 
 ```php
-$request1 = $client->send('task1');
-$request2 = $client->send('task2');
-$request3 = $client->send('task3');
+$first  = $client->send(new Request('calculate', new CalculateRequest(a: 10, b: 20)));
+$second = $client->send(new Request('calculate', new CalculateRequest(a: 30, b: 40)));
+$third  = $client->send(new Request('calculate', new CalculateRequest(a: 50, b: 60)));
 
-$response = $request2->await();
+// collect them together...
+[$a, $b, $c] = $client->all($first, $second, $third);
+
+// ...or one at a time, in any order
+$b = $second->await();
 ```
+
+`send()` writes the request out and returns immediately, so all three occupy
+workers at once - measured at 0.51s against 1.50s for the same three
+`call()`s with a handler sleeping 0.5s.
 
 ---
 
 ## Phase 19 — Graceful Reload
 
-* [ ] Handle SIGHUP
-* [ ] Start new Workers
-* [ ] Route new requests to new Workers
-* [ ] Drain old Workers
-* [ ] Shutdown old Workers
+* [x] Handle SIGHUP
+* [x] Start new Workers
+* [x] Route new requests to new Workers
+* [x] Drain old Workers
+* [x] Shutdown old Workers
 
 ---
 
 ## Phase 20 — Worker Autoscaling
 
-* [ ] Configure minimum Workers
-* [ ] Configure maximum Workers
-* [ ] Scale based on queue size
-* [ ] Scale based on Worker utilization
+* [x] Configure minimum Workers
+* [x] Configure maximum Workers
+* [x] Scale based on queue size
+* [x] Scale based on Worker utilization
 
 ---
 
