@@ -1,16 +1,150 @@
 # PHP Worker Pool
 
-> A production-inspired multi-process Worker Pool for PHP built with persistent worker processes, IPC, Unix Domain Sockets, and an asynchronous event-driven Master process.
+> A production-inspired multi-process Worker Pool for PHP: persistent worker processes, IPC over socket pairs, a Unix domain socket front door, and a single-threaded event-driven Master.
 
-`php-worker-pool` is an educational project that explores how multi-process PHP runtimes and worker-based architectures work internally.
+An educational project that answers one question by building the answer:
+**how does a worker-based PHP runtime actually work inside?** Not a
+replacement for RoadRunner, Swoole, FrankenPHP or PHP-FPM - a from-scratch
+implementation of the mechanisms they are built on.
 
-**[docs/REQUEST-LIFECYCLE.md](docs/REQUEST-LIFECYCLE.md)** follows a single request all the way through - client, Master, worker and back - with the detail of every hop: framing, correlation ids, dispatch, the event loop, the failure paths, and what the Master does between requests.
+```text
+  your PHP code ──▶ Unix socket ──▶ Master ──▶ worker pool ──▶ back again
+                                    (event loop, queue, supervisor)
+```
 
-The project implements a long-running Master process that accepts requests from external PHP applications, delegates work to a pool of persistent workers, and asynchronously routes responses back to clients.
+---
 
-The goal is not to replace existing solutions such as RoadRunner, Workerman, Swoole, or PHP-FPM.
+## 30-second demo
 
-The goal is to understand the underlying concepts by building them from scratch.
+Requires Docker. Nothing is installed on your machine.
+
+```bash
+make install          # build the image and install dependencies
+make run              # start the Master (2 workers, grows to 16 under load)
+```
+
+In a second terminal:
+
+```bash
+docker compose exec php php bin/client.php
+# {"result":30}
+# {"result":30}
+# [{"result":30},{"result":70},{"result":110}]
+```
+
+That last line is three requests running on three different workers at once.
+
+Then try the things that make it a pool rather than a socket server:
+
+```bash
+# how fast is it, really
+make bench ARGS="--clients=8 --requests=500"
+```
+
+The Master is driven by signals, the way php-fpm and nginx are. `MASTER` below
+is its pid - the parent of all the workers:
+
+```bash
+MASTER=$(docker compose exec -T php pgrep -o -f "bin/server.php")
+
+# kill one worker outright - a replacement is forked within a second
+docker compose exec -T php bash -c "kill -9 \$(pgrep -P $MASTER | head -1)"
+
+# ask the Master how it is doing                     (SIGUSR1)
+docker compose exec -T php kill -USR1 $MASTER
+
+# replace every worker without dropping a request    (SIGHUP)
+docker compose exec -T php kill -HUP $MASTER
+
+# drain in-flight work, then stop                    (SIGTERM)
+docker compose exec -T php kill -TERM $MASTER
+```
+
+`pgrep -o` picks the *oldest* match, which is the Master rather than one of
+its workers - they all share a command line.
+
+---
+
+## Using it
+
+The server decides what requests mean. That lives in `bin/server.php`, not
+in the runtime:
+
+```php
+$handler = static function (Request $request): Response {
+    return match ($request->action) {
+        'calculate' => Response::of(new CalculateAction()(
+            PayloadHydrator::hydrate(CalculateRequest::class, $request->params)
+        )),
+        default => Response::error('unknown_action'),
+    };
+};
+
+(new Master(handler: $handler))->run();
+```
+
+The client is a plain PHP object - usable from PHP-FPM, CLI, cron, or a
+queue consumer:
+
+```php
+$client = new WorkerPoolClient('/tmp/php-worker-pool.sock');
+
+// one request
+$result = $client->call(new Request('calculate', new CalculateRequest(a: 10, b: 20)));
+
+// or several at once, running on separate workers
+$a = $client->send(new Request('calculate', new CalculateRequest(a: 1, b: 2)));
+$b = $client->send(new Request('calculate', new CalculateRequest(a: 3, b: 4)));
+[$first, $second] = $client->all($a, $b);
+```
+
+Requests are typed at both ends: the payload is hydrated into the DTO the
+action declares, and a payload that doesn't fit comes back as
+`ServerErrorException('invalid_payload')` before the action runs.
+
+---
+
+## What it does
+
+| | |
+|---|---|
+| **Persistent workers** | forked once, reused for every request - no per-request bootstrap |
+| **Async Master** | one `stream_select()` over the listener, every client, and every busy worker |
+| **Message framing** | length-prefixed frames over a byte stream: partial reads, partial writes, multiple messages per read |
+| **Correlation ids** | responses come back in any order and still reach the right caller |
+| **Multiplexing** | many requests in flight per connection, client side included |
+| **Backpressure** | a bounded queue that rejects instead of growing until OOM |
+| **Timeouts** | per-request deadlines, swept once a second |
+| **Crash recovery** | SIGCHLD, the dead worker's request failed, a replacement forked |
+| **Worker recycling** | replaced after N requests / an age / a memory ceiling - drained, never killed mid-request |
+| **Graceful shutdown** | SIGTERM drains in-flight work within one budget, then force-stops |
+| **Graceful reload** | SIGHUP swaps the whole generation without dropping a connection |
+| **Autoscaling** | grows on queue pressure, shrinks when idle |
+| **Metrics** | SIGUSR1 dumps a snapshot |
+
+---
+
+## Documentation
+
+| | |
+|---|---|
+| **[docs/REQUEST-LIFECYCLE.md](docs/REQUEST-LIFECYCLE.md)** | one request followed hop by hop, client to worker and back, with every failure path |
+| **[docs/BENCHMARKS.md](docs/BENCHMARKS.md)** | measured throughput and latency, where it scales and where it stops |
+| **[PLAN.md](PLAN.md)** | the 20 phases this was built in, and why each mechanism exists |
+| the rest of this file | the concepts, in depth |
+
+---
+
+## Development
+
+```bash
+make test        # PHPUnit
+make analyse     # PHPStan level 6
+make shell       # a shell in the container
+```
+
+Debugging is opt-in so that forked processes don't all reach for a debugger:
+`XDEBUG_TRIGGER=1 php bin/server.php`.
 
 ---
 

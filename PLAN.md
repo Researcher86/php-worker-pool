@@ -2014,6 +2014,49 @@ first - plus out-of-order collection, error isolation, and double-await) and
 
 ---
 
+# Post-Phase-20: Recycling, Benchmarks, Onboarding
+
+Work driven by an outside review of the finished project. Three of its
+points landed; one was already true but badly expressed; one needed a
+correction.
+
+**Worker recycling (new).** The review's strongest point, and it was right:
+for persistent PHP this isn't a nicety. RecyclingPolicy adds maxRequests,
+maxLifetime and maxMemoryBytes, on by default in Master. See the section
+above for the mechanism.
+
+**DRAINING (agreed, with a caveat).** The review asked for the state; the
+behaviour already existed for reload and scale-down, expressed as a
+parallel `retiringPids` map. Adding the state added no capability - it
+deleted that map and gave recycling the same mechanism for free, which is a
+better reason to do it than the one asked for.
+
+**Benchmarks (new).** See docs/BENCHMARKS.md. One correction to the review:
+wrk and k6 don't apply here - both speak HTTP, this speaks a length-prefixed
+protocol over a Unix socket - so the load generator is bin/bench.php,
+driving the pool through the project's own SDK.
+
+**Tests (partly already true).** The review's chaos list - worker dies
+mid-request, client disconnects mid-request, malformed frame, worker returns
+an invalid response - was already covered, each by name in DispatcherTest
+and ClientRegistryTest. What was genuinely missing was load, which
+bin/bench.php now provides. The suggested IdGenerator unit test has nothing
+to test: it was deliberately never built (see the Actual Structure note).
+
+**README (agreed).** It had grown to 1200 lines of concepts with no way in.
+It now opens with a 30-second demo, a usage example, a capability table and
+a documentation index, with the conceptual material kept below.
+
+**One thing the benchmarks found on their own:** the first 8-worker run
+took 59 seconds for work that took 0.9, with every individual request
+measuring 0.17ms - the processes were taking a minute to exit. The cause was
+this repository's own Dockerfile setting `xdebug.start_with_request=yes`,
+which makes every PHP process attempt a debugger connection; harmless for
+one process, a minute of teardown for eighteen. Now `trigger`. The test
+suite got 35% faster as a side effect.
+
+---
+
 # Recommended Implementation Order
 
 ## MVP
