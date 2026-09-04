@@ -14,10 +14,16 @@ COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
 ENV PHP_IDE_CONFIG serverName=php-worker-pool
 
+# start_with_request=trigger, not yes: this project runs a long-lived master
+# plus N forked workers plus forked clients, and with "yes" EVERY one of those
+# processes tries to reach a debugger that usually isn't listening. That cost
+# is invisible until it isn't - it made an 8-worker benchmark take 60s instead
+# of 0.9s, purely in process teardown. Debugging is now opt-in per run:
+#   XDEBUG_TRIGGER=1 php bin/server.php      (or the IDE's own trigger)
 RUN { \
         echo 'zend_extension=xdebug'; \
         echo 'xdebug.mode=debug'; \
-        echo 'xdebug.start_with_request=yes'; \
+        echo 'xdebug.start_with_request=trigger'; \
         echo 'xdebug.client_host=host.docker.internal'; \
         echo 'xdebug.client_port=9003'; \
         echo 'xdebug.discover_client_host=1'; \
