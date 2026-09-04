@@ -58,6 +58,23 @@ final class ClientRegistry
     }
 
     /**
+     * Whether any connected client still has buffered response bytes waiting
+     * to go out. Master's shutdown uses this to keep ticking the loop until
+     * the final frames actually leave the process (buffered writes only make
+     * progress inside EventLoop::tick()).
+     */
+    public function hasPendingWrites(): bool
+    {
+        foreach ($this->clients as $client) {
+            if ($client->hasPendingWrites()) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Starts tracking a newly accepted client connection.
      *
      * @param resource $socket a client socket accepted from a server
@@ -66,7 +83,7 @@ final class ClientRegistry
      */
     public function accept(mixed $socket): void
     {
-        $client = new ClientConnection(new Socket($socket));
+        $client = new ClientConnection(new Socket($socket), $this->loop);
         $this->clients[$client->getId()] = $client;
 
         $this->loop->addReadable($client->getResource(), function () use ($client): void {

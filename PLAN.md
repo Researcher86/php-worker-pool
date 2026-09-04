@@ -1731,6 +1731,161 @@ added - see the Actual Structure note above.
 
 ---
 
+# Post-Phase-20 Hardening (Third Review Pass)
+
+A full-project review after everything above landed found no bugs in any
+single phase's happy path - what it found was in the seams: signal handling
+across fork(), framing after a failed write, and the two places where one
+misbehaving peer could still take down or stall the whole single-threaded
+Master. All fixed:
+
+- **A worker's malformed bytes crashed the Master.** `Dispatcher::watch()`
+  caught only `ConnectionClosedException`; `MalformedMessageException` from
+  a desynced worker stream propagated through `EventLoop::tick()` straight
+  out of Master's main loop. Both are now treated as a worker crash (the
+  in-flight request fails with `worker_crashed`, the socket is closed so a
+  still-running desynced worker exits and gets replaced via SIGCHLD).
+  Covered by `DispatcherTest::testMalformedBytesFromAWorkerAreTreatedAsACrashNotAMasterCrash`.
+
+- **A given-up write desynced the stream instead of ending it.**
+  `Socket::write()` hitting `writeTimeoutSeconds` mid-frame returned
+  silently, leaving the connection open with half a frame sent - the next
+  write would be parsed by the peer as the rest of that frame. The socket
+  now marks itself broken (all later writes dropped) and shuts down its
+  sending side, so the peer sees clean EOF instead of garbage. Covered by
+  `SocketTest::testAGivenUpWriteBreaksTheSocketInsteadOfDesyncingTheStream`.
+
+- **One slow client could stall the Master for up to 5s per frame.** Client
+  writes went through `Socket::write()`'s bounded-blocking retry - fine for
+  workers and the SDK, wrong inside the single-threaded Master.
+  `ClientConnection` now buffers writes and flushes them on EventLoop
+  writability events (`EventLoop` gained `addWritable`/`removeWritable`),
+  never blocking; a stuck client's buffer is capped (4 MiB) rather than
+  growing without bound, and `Master::shutdown()` drains remaining client
+  buffers within the same shutdown budget before exiting. Covered by
+  `ClientConnectionTest` and `EventLoopTest::testTickInvokesWritableHandlerUntilRemoved`.
+
+- **Forked workers inherited Master's signal handlers and mask.** A worker
+  forked after Master registered its handlers (a crash replacement, a
+  scale-up) carried closures over Master state: SIGHUP delivered to it would
+  run `reload()` *inside the worker* and fork grandchildren. The child now
+  resets every handler Master registers to `SIG_DFL` and clears the
+  inherited signal mask before entering the worker loop
+  (`ForkedWorkerLauncher`).
+
+- **Async SIGCHLD could interleave with WorkerPool's own mutations.** With
+  `pcntl_async_signals(true)`, `reapDeadWorkers()` could fire between any
+  two statements of `stop()`/`reload()`/`scaleUp()`/`scaleDown()`/
+  `retireIdleWorkers()`, and `stop()`'s `waitpid()` loop competed with the
+  handler's for the same child exits. Each mutating operation now runs with
+  SIGCHLD delivery deferred (`pcntl_sigprocmask`; blocked, not ignored -
+  delivered the moment the operation ends), making it atomic with respect
+  to the reaper. Three narrower windows of the same class, also closed:
+  Master's SIGCHLD handler no longer writes to clients from signal context
+  (it could reenter an unfinished buffered write on the same connection) -
+  it only reaps and records, and the main loop delivers the worker_crashed
+  errors; `WorkerPool::write()` re-checks the worker atomically and returns
+  null if it was reaped between `getAvailable()` and the dispatch
+  (`Dispatcher::pump()` requeues and picks another); and
+  `WorkerProcess::finishRequest()` tolerates a worker the reaper marked
+  DEAD a moment earlier instead of throwing from the timing window.
+
+- **Autoscaler scaled the fresh generation away right after a reload.**
+  Found by this pass's live SIGHUP run (unit tests all green throughout):
+  right after reload() on an idle pool, `count()` briefly sees both
+  generations (new available + old STOPPING), so `Autoscaler::check()`
+  concluded "4 workers, floor is 2, queue empty" and called `scaleDown(2)` -
+  and since scaleDown() skips already-retiring workers, the only candidates
+  were the NEW generation. Deterministic: an idle pool's reload always ended
+  at zero workers. Scaling decisions now use the new
+  `WorkerPool::countActive()` (workers that are staying - not retiring, not
+  STOPPING, not DEAD) for the floor, keeping `count()` only for the
+  maxWorkers ceiling, which caps live processes on purpose. Covered by
+  `AutoscalerTest::testDoesNotScaleDownTheFreshGenerationDuringAReload` and
+  re-verified live (SIGHUP swaps the full generation, requests keep
+  answering, pool stays at size through the cooldown).
+
+- **A handler exception killed the whole worker.** `WorkerRunner` now
+  answers the request with `{"error":"handler_failed"}` and keeps serving -
+  a handler bug cost a reap-and-refork and a `worker_crashed` for something
+  an error reply answers just as well. Covered by `PersistentWorkerTest::
+  testHandlerFailureAnswersWithAnErrorAndTheWorkerSurvives`.
+
+- **Recovered failures vanished without a trace.** The launch failures
+  WorkerPool deliberately survives (crash replacement, reload wave,
+  scale-up) were empty `catch` blocks - no exception, no metric, no record.
+  A minimal `Support/Logger` (one method; `StderrLogger` in Master,
+  `NullLogger` default) now records them. Deliberately not PSR-3: this
+  codebase has no dependencies, and these sites need "record that this
+  happened", nothing more.
+
+- **Master's config was hardcoded; nothing tested it end to end.** Socket
+  path, worker bounds, queue size, and timeouts are now constructor
+  parameters (defaults unchanged - still each phase's own example values),
+  `bin/server.php` honors `WORKER_POOL_SOCKET`, and a new
+  `MasterEndToEndTest` boots the real `bin/server.php`, round-trips a real
+  request through the SDK, SIGTERMs it, and asserts clean exit plus socket
+  file removal. A GitHub Actions workflow runs the suite and PHPStan on
+  every push.
+
+---
+
+# Post-Phase-20 Simplification Pass (Fourth)
+
+A follow-up pass with two goals: remove complexity that wasn't earning its
+keep, and close the remaining architectural gaps the third pass had only
+mitigated pointwise. One more latent bug fell out of the simplification
+itself:
+
+- **Queued requests could strand after a burst.** Exposed by rewriting the
+  batch-API tests onto the event-driven path (they immediately failed): the
+  event path pumped the queue only when a NEW request arrived - a worker
+  answering never triggered a dispatch, so a burst followed by silence left
+  the queue's tail sitting until request timeout. This is PLAN.md Phase 7's
+  own "Worker Response -> dispatch()" event, which the batch API implemented
+  (in waitForActivity()) but the event path never did - and Master had used
+  the event path since Phase 11, masked by continuous traffic re-pumping the
+  queue. Dispatcher now pumps immediately when a worker finishes a request,
+  and Master calls the new `Dispatcher::dispatchQueued()` once per tick for
+  capacity the Dispatcher can't observe appearing (a crash replacement, a
+  scale-up, a reload's fresh generation). The rewritten
+  `DispatcherTest::testProcessesMoreRequestsThanWorkersThroughTheQueue`
+  (burst of 6 into 2 workers, then ticks only) is the regression test;
+  verified live with 12 parallel clients against 2 workers - 12/12 answered.
+
+- **The synchronous batch API is gone.** `Dispatcher::run()` /
+  `waitForActivity()` / `UnresolvedRequestsException` /
+  `RequestQueue::hasCapacityFor()` were used by nothing but tests - Master
+  has been dispatch()+onResponse since Phase 11. One execution model to
+  reason about instead of two; the tests that used run() now exercise the
+  same scenarios through the event path (which is how the starvation bug
+  above surfaced).
+
+- **The SDK no longer returns server errors as results.**
+  `WorkerPoolClient::call()` used to hand back an ERROR payload as if the
+  request had succeeded - every caller was responsible for remembering to
+  check for an 'error' key. It now throws `Sdk\ServerErrorException`
+  (carrying the machine-readable code - server_overloaded, request_timeout,
+  worker_crashed, handler_failed, server_shutting_down - and the full
+  payload).
+
+- **Master restructured: self-pipe for signals, properties over closures,
+  Clock injected.** SIGCHLD/SIGHUP/SIGUSR1 handlers now write one
+  identifying byte to a self-pipe registered with the same EventLoop; the
+  actual work (reap-and-fail, reload, metrics dump) runs from
+  drainSignalPipe() in ordinary main-loop context on the very next tick.
+  This eliminates the async-signal-reentrancy class of problems structurally
+  rather than pointwise: no more forking a new generation from inside signal
+  context, no more third-pass lost-request queue (reaping now happens where
+  writing to clients is safe, so it just does both). WorkerPool's own
+  sigprocmask deferral stays as defense-in-depth for standalone use. The
+  wiring itself moved from one long run() with a web of use() closures to
+  properties plus named private handlers (handleClientRequest,
+  routeResponse, reapCrashedWorkers, ...), and Master takes a Clock like
+  the other time-dependent components.
+
+---
+
 # Recommended Implementation Order
 
 ## MVP
@@ -1875,9 +2030,11 @@ nothing ever needed standalone `Request`/`Response` value objects beyond
 `Sdk/`, not `Client/`, since it's a consumer of the protocol from outside
 the Master process, not part of the Master's own client-handling. Each
 namespace holds its own exception types next to what throws them
-(`Dispatcher\UnresolvedRequestsException`, `IPC\ConnectionClosedException`,
-`Protocol\MalformedMessageException`, `Sdk\ConnectionFailedException`,
-`Sdk\RequestTimedOutException`) rather than a shared `Exceptions/`.
+(`IPC\ConnectionClosedException`, `Protocol\MalformedMessageException`,
+`Sdk\ConnectionFailedException`, `Sdk\RequestTimedOutException`,
+`Sdk\ServerErrorException`) rather than a shared `Exceptions/` -
+`Dispatcher\UnresolvedRequestsException` existed while Dispatcher still had
+its synchronous batch API and left with it (fourth pass, below).
 `Metrics/MetricsRegistry` became `Metrics/MetricsCollector` (plus
 `Metrics.php` and `RequestMetrics.php` for the snapshot value object and the
 counters it reads - Phase 17). `Support/IdGenerator` was never built - every
@@ -1897,8 +2054,7 @@ src/
 │   └── EventLoop.php
 │
 ├── Dispatcher/
-│   ├── Dispatcher.php
-│   └── UnresolvedRequestsException.php
+│   └── Dispatcher.php
 │
 ├── Worker/
 │   ├── WorkerPool.php
@@ -1937,7 +2093,8 @@ src/
 ├── Sdk/
 │   ├── WorkerPoolClient.php
 │   ├── ConnectionFailedException.php
-│   └── RequestTimedOutException.php
+│   ├── RequestTimedOutException.php
+│   └── ServerErrorException.php
 │
 ├── Metrics/
 │   ├── Metrics.php
@@ -1946,7 +2103,10 @@ src/
 │
 └── Support/
     ├── Clock.php
-    └── SystemClock.php
+    ├── SystemClock.php
+    ├── Logger.php
+    ├── StderrLogger.php
+    └── NullLogger.php
 ```
 
 ---

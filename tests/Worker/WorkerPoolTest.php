@@ -5,6 +5,7 @@ declare(ticks = 1);
 namespace App\Tests\Worker;
 
 use App\Dispatcher\Dispatcher;
+use App\EventLoop\EventLoop;
 use App\IPC\ConnectionClosedException;
 use App\Protocol\Message;
 use App\Protocol\MessageType;
@@ -65,14 +66,21 @@ final class WorkerPoolTest extends TestCase
     public function testMultipleWorkersProcessRequestsInParallel(): void
     {
         $pool = new WorkerPool(4);
-        $dispatcher = new Dispatcher(new RequestQueue(), $pool);
+        $loop = new EventLoop();
+        $responses = [];
 
-        $responses = $dispatcher->run([
-            new Message(MessageType::REQUEST, 'req-1'),
-            new Message(MessageType::REQUEST, 'req-2'),
-            new Message(MessageType::REQUEST, 'req-3'),
-            new Message(MessageType::REQUEST, 'req-4'),
-        ]);
+        $dispatcher = new Dispatcher(new RequestQueue(), $pool, $loop, function (Message $message) use (&$responses): void {
+            $responses[] = $message;
+        });
+
+        foreach (['req-1', 'req-2', 'req-3', 'req-4'] as $id) {
+            $dispatcher->dispatch(new Message(MessageType::REQUEST, $id));
+        }
+
+        // All four went to distinct workers at once - collect their answers.
+        for ($i = 0; $i < 200 && count($responses) < 4; $i++) {
+            $loop->tick(0.1);
+        }
 
         $this->assertCount(4, $responses);
 
@@ -87,17 +95,27 @@ final class WorkerPoolTest extends TestCase
     public function testGetAvailableReturnsIdleWorkerThenChangesWhenBusy(): void
     {
         $pool = new WorkerPool(1);
-        $workerId = $pool->getAvailable();
+        $loop = new EventLoop();
+        $responses = [];
 
+        $workerId = $pool->getAvailable();
         $this->assertNotNull($workerId);
 
-        $dispatcher = new Dispatcher(new RequestQueue(), $pool);
-        $responses = $dispatcher->run([
-            new Message(MessageType::REQUEST, 'req', ['data' => 'x']),
-        ]);
+        $dispatcher = new Dispatcher(new RequestQueue(), $pool, $loop, function (Message $message) use (&$responses): void {
+            $responses[] = $message;
+        });
+
+        $dispatcher->dispatch(new Message(MessageType::REQUEST, 'req', ['data' => 'x']));
+
+        // Mid-request the only worker is BUSY - nothing available.
+        $this->assertNull($pool->getAvailable());
+
+        for ($i = 0; $i < 200 && count($responses) < 1; $i++) {
+            $loop->tick(0.1);
+        }
 
         $this->assertCount(1, $responses);
-        $this->assertSame($workerId, $pool->getAvailable());
+        $this->assertSame($workerId, $pool->getAvailable()); // idle again after answering
 
         $pool->stop();
     }

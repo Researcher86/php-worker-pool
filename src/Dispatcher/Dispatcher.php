@@ -21,32 +21,30 @@ use App\Worker\WorkerProcess;
  * registered with the EventLoop only while it is busy, so the master blocks
  * in a single multiplexed select across every worker currently in flight and
  * wakes up as soon as any of them has produced a response.
+ *
+ * There used to be a second, synchronous batch API here (run(): submit a
+ * list, block until every response arrived) - removed once it was clear only
+ * tests ever used it: one execution model to reason about beats two, and
+ * everything the batch API did is expressible as dispatch() + ticking the
+ * loop until onResponse has delivered what you're waiting for.
  */
 final class Dispatcher
 {
-    private readonly EventLoop $loop;
-
     /** @var \Closure(Message): void */
     private readonly \Closure $onResponse;
 
-    /** @var list<Message> */
-    private array $collected = [];
-
     /**
-     * @param callable(Message): void|null $onResponse invoked with every
-     *        response as soon as it's read from a worker - the event-driven
-     *        counterpart to draining waitForActivity()/run()'s return value.
-     *        Defaults to a no-op for callers that only use the batch API.
+     * @param callable(Message): void $onResponse invoked with every response
+     *        as soon as it's read from a worker — either a real reply, or the
+     *        worker_crashed error synthesized when a worker died mid-request
      */
     public function __construct(
         private readonly RequestQueue $queue,
         private readonly WorkerPool $pool,
-        ?EventLoop $loop = null,
-        ?callable $onResponse = null,
+        private readonly EventLoop $loop,
+        callable $onResponse,
     ) {
-        $this->loop = $loop ?? new EventLoop();
-        $this->onResponse = \Closure::fromCallable($onResponse ?? static function (Message $message): void {
-        });
+        $this->onResponse = \Closure::fromCallable($onResponse);
     }
 
     /**
@@ -72,82 +70,17 @@ final class Dispatcher
     }
 
     /**
-     * Dispatches every request across the pool and blocks until a response has
-     * arrived for each one. Requests beyond the number of workers wait in the
-     * queue and are dispatched automatically as workers become idle.
-     *
-     * @param list<Message> $requests
-     *
-     * @return list<Message> responses, one for each submitted request
-     *
-     * @throws MalformedMessageException
-     * @throws UnresolvedRequestsException if a worker dies while holding a
-     *         request and no other worker can ever pick it up
+     * Push queued requests onto whatever workers are free right now - a
+     * no-op when the queue is empty or nothing is available. The two dispatch
+     * events (a request arriving, a worker answering) already pump
+     * internally; this exists for capacity that appears OUTSIDE a dispatch
+     * event - a crash replacement being launched, a scale-up, a reload's
+     * fresh generation - which the Dispatcher itself never observes. Master
+     * calls it once per tick, same as its other per-tick sweeps.
      */
-    public function run(array $requests): array
+    public function dispatchQueued(): void
     {
-        // The bounded queue (Phase 13 backpressure) rejects in dispatch() by
-        // returning false, but run() returns list<Message> and can't signal a
-        // single rejection - so when the whole batch wouldn't fit, fail fast
-        // rather than silently growing past the limit. Checked against the
-        // full batch size up front (not isFull() per iteration) so this
-        // either queues every request or none of them - never leaves a
-        // partial batch sitting in the queue with no way to run() again for
-        // the rest. dispatch() keeps the fine-grained per-request behaviour
-        // for the event-driven path.
-        if (!$this->queue->hasCapacityFor(count($requests))) {
-            throw new \RuntimeException('request queue does not have capacity for this batch');
-        }
-
-        $pending = [];
-        foreach ($requests as $request) {
-            $this->queue->enqueue($request);
-            $pending[$request->id] = true;
-        }
         $this->pump();
-
-        $responses = [];
-        while ($pending !== []) {
-            foreach ($this->waitForActivity() as $message) {
-                // Only keep responses for requests this call submitted —
-                // guards against a stray/duplicate message with an id we
-                // aren't tracking ever ending up in the returned list.
-                if (isset($pending[$message->id])) {
-                    unset($pending[$message->id]);
-                    $responses[] = $message;
-                }
-            }
-
-            // A worker can die while holding a request (see watch() below);
-            // when that happens its response will never arrive. If nothing
-            // is queued and no worker socket is being watched, there is
-            // nothing left that could ever resolve the remaining pending
-            // ids — waiting again would block forever, so bail instead.
-            if ($pending !== [] && $this->queue->isEmpty() && !$this->loop->hasReadable()) {
-                throw new UnresolvedRequestsException(array_keys($pending));
-            }
-        }
-
-        return $responses;
-    }
-
-    /**
-     * Worker-response event: block until at least one busy worker's socket
-     * becomes readable, collect whatever responses that produced, then
-     * dispatch any queued requests to the now-idle workers.
-     *
-     * @return list<Message> responses collected from workers that became readable
-     *
-     * @throws MalformedMessageException
-     */
-    public function waitForActivity(): array
-    {
-        $this->collected = [];
-
-        $this->loop->tick();
-        $this->pump();
-
-        return $this->collected;
     }
 
     /**
@@ -165,17 +98,32 @@ final class Dispatcher
         $this->loop->addReadable($resource, function () use ($worker, $resource): void {
             try {
                 foreach ($worker->readAvailable() as $message) {
-                    if ($worker->getCurrentRequestId() === $message->id) {
+                    $finished = $worker->getCurrentRequestId() === $message->id;
+
+                    if ($finished) {
                         $worker->finishRequest();
                         $this->loop->removeReadable($resource);
                     }
 
-                    $this->collected[] = $message;
                     ($this->onResponse)($message);
+
+                    // PLAN.md Phase 7's second dispatch event: "Worker
+                    // Response -> dispatch()". The worker just went idle -
+                    // hand it the next queued request immediately (this may
+                    // re-register the very socket deregistered above, now
+                    // watching for the new request's response).
+                    if ($finished) {
+                        $this->pump();
+                    }
                 }
-            } catch (ConnectionClosedException) {
-                // The worker process is gone (PLAN.md Phase 15). Capture
-                // before markDead() clears it — WorkerPool::reapDeadWorkers()
+            } catch (ConnectionClosedException | MalformedMessageException) {
+                // Either the worker process is gone (ConnectionClosed,
+                // PLAN.md Phase 15), or its stream produced bytes that don't
+                // parse (Malformed - a framing desync, which has no recovery).
+                // Both make the worker unusable, and letting Malformed
+                // propagate would take the whole Master down - nothing above
+                // this handler catches it. Treat both as a crash. Capture the
+                // id before markDead() clears it — WorkerPool::reapDeadWorkers()
                 // may independently detect and report the same crash via
                 // SIGCHLD; whichever of the two gets here first is the one
                 // that actually has a non-null id to report, the other just
@@ -184,14 +132,17 @@ final class Dispatcher
                 $worker->markDead();
                 $this->loop->removeReadable($resource);
 
-                // run()'s stall check handles this for the batch API (no
-                // request id needed there — it just notices nothing is
-                // watched or queued anymore). The event-driven API has no
-                // equivalent poll to fall back on, so synthesize a response
-                // here instead: onResponse is already "something happened to
+                // For a desynced-but-still-running worker this is what ends
+                // it: closing our end gives its next read EOF, it exits, and
+                // SIGCHLD reaps and replaces it like any other crash. For a
+                // worker that's already gone this just releases our fd early
+                // instead of waiting for the handle to be garbage-collected.
+                $worker->close();
+
+                // Synthesize a response for the request that will now never
+                // be answered: onResponse is already "something happened to
                 // this request id" for Master, whether it's a real worker
-                // reply or, as here, an error standing in for one that will
-                // never arrive.
+                // reply or, as here, an error standing in for one.
                 if ($requestId !== null) {
                     ($this->onResponse)(new Message(MessageType::ERROR, $requestId, ['error' => 'worker_crashed']));
                 }
@@ -202,8 +153,6 @@ final class Dispatcher
     /**
      * Sends queued requests to every idle worker until none remain, watching
      * each one's socket for its response.
-     *
-     * @throws MalformedMessageException
      */
     private function pump(): void
     {
@@ -214,7 +163,20 @@ final class Dispatcher
                 return; // all workers busy; wait for a worker response
             }
 
-            $this->watch($this->pool->write($workerId, $this->queue->dequeue()));
+            $request = $this->queue->dequeue();
+            $worker = $this->pool->write($workerId, $request);
+
+            if ($worker === null) {
+                // The worker vanished between getAvailable() and write()
+                // (reaped by an async SIGCHLD in between). Requeue and go
+                // around - the next getAvailable() no longer sees it, so
+                // this can't loop on the same worker.
+                $this->queue->enqueue($request);
+
+                continue;
+            }
+
+            $this->watch($worker);
         }
     }
 }

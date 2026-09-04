@@ -35,6 +35,24 @@ final class ForkedWorkerLauncher implements WorkerLauncher
         }
 
         if ($pid === 0) {
+            // fork() copies the parent's pcntl signal handlers, and a worker
+            // forked after Master registered its own (a crash replacement, a
+            // scale-up) inherits closures over Master's state: a SIGHUP
+            // delivered to this child would run Master's reload handler
+            // INSIDE the worker and start forking grandchildren, SIGUSR1
+            // would dump Master's metrics from the wrong process, SIGTERM
+            // would flip a shutdown flag nothing in the worker reads. Reset
+            // every signal Master is known to catch back to the OS default
+            // before entering the worker loop.
+            foreach ([SIGINT, SIGTERM, SIGCHLD, SIGHUP, SIGUSR1] as $signal) {
+                pcntl_signal($signal, SIG_DFL);
+            }
+
+            // The signal MASK is inherited too - a worker forked from inside
+            // one of WorkerPool's SIGCHLD-deferred sections (a scale-up, a
+            // reload wave) would otherwise start life with SIGCHLD blocked.
+            pcntl_sigprocmask(SIG_SETMASK, []);
+
             $socketPair->closeMaster();
 
             $runner = new WorkerRunner($socketPair->getWorkerSocket());

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\IPC;
 
+use App\IPC\ConnectionClosedException;
 use App\IPC\Socket;
 use App\Protocol\Message;
 use App\Protocol\MessageType;
@@ -93,5 +94,47 @@ final class SocketTest extends TestCase
 
         fclose($readEnd);
         $writer->close();
+    }
+
+    /**
+     * Once write() gives up on a frame partway through, the stream is stuck
+     * mid-frame - nothing written after it could ever be framed correctly by
+     * the peer's decoder. Giving up used to be silent: the NEXT write went
+     * out anyway and was parsed as the rest of the abandoned frame. Now the
+     * socket marks itself broken - later writes are dropped, and the sending
+     * side is shut down so the peer sees clean EOF, never a garbled frame.
+     */
+    public function testAGivenUpWriteBreaksTheSocketInsteadOfDesyncingTheStream(): void
+    {
+        [$writeEnd, $readEnd] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+        stream_set_blocking($writeEnd, false);
+
+        // A timeout so small the write gives up as soon as the kernel send
+        // buffer fills (nothing is draining the other end yet).
+        $writer = new Socket($writeEnd, writeTimeoutSeconds: 0.001);
+
+        // Bigger than the kernel send buffer: gives up mid-frame.
+        $writer->write(new Message(MessageType::REQUEST, 'req-1', ['blob' => str_repeat('x', 700_000)]));
+
+        // Must be silently dropped, NOT appended after the unfinished frame.
+        $writer->write(new Message(MessageType::REQUEST, 'req-2', ['x' => 1]));
+
+        // The reader drains what did arrive: the only frame ever started is
+        // incomplete, so it must decode nothing and then see clean EOF.
+        $reader = new Socket($readEnd);
+        $decoded = [];
+
+        try {
+            while (true) {
+                $decoded = [...$decoded, ...$reader->read()];
+            }
+        } catch (ConnectionClosedException) {
+            // clean EOF - exactly what a broken writer should look like
+        }
+
+        $this->assertSame([], $decoded);
+
+        $writer->close();
+        $reader->close();
     }
 }

@@ -36,7 +36,18 @@ final readonly class WorkerRunner
                     return;
                 }
 
-                $this->sendResponse($this->handle($message));
+                try {
+                    $response = $this->handle($message);
+                } catch (\Throwable) {
+                    // A handler bug must not kill the worker: crashing here
+                    // would cost the Master a reap-and-refork and turn one
+                    // bad request into a worker_crashed for its client, when
+                    // an error reply answers it just as definitively - and
+                    // the worker stays warm for the next request.
+                    $response = new Message(MessageType::ERROR, $message->id, ['error' => 'handler_failed']);
+                }
+
+                $this->sendResponse($response);
             }
         }
     }

@@ -432,8 +432,6 @@ request
 response
 error
 shutdown
-ping
-pong
 ```
 
 Example request:

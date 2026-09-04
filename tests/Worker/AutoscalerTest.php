@@ -52,6 +52,37 @@ final class AutoscalerTest extends TestCase
         $pool->stop();
     }
 
+    /**
+     * Regression test (found by a live SIGHUP run, not any earlier unit
+     * test): right after reload() the pool briefly holds both generations -
+     * the new one available, the outgoing one STOPPING until reaped. check()
+     * used to judge "too many workers" by count() (which sees them all), and
+     * since scaleDown() skips already-retiring workers, the only candidates
+     * it could retire were the NEW generation - an idle pool's reload
+     * deterministically scaled itself down to zero workers.
+     */
+    public function testDoesNotScaleDownTheFreshGenerationDuringAReload(): void
+    {
+        $pool = new WorkerPool(2, new FakeWorkerLauncher(), maxWorkers: 16);
+        $queue = new RequestQueue();
+        $autoscaler = new Autoscaler($pool, $queue, minWorkers: 2, maxWorkers: 16, step: 2, cooldownSeconds: 0.0);
+
+        // Idle pool: reload() retires the old generation immediately, so the
+        // pool now holds 2 fresh available workers + 2 STOPPING ones
+        // awaiting their exit being reaped.
+        $pool->reload();
+        $this->assertSame(4, $pool->count());
+        $this->assertSame(2, $pool->countActive());
+
+        $autoscaler->check(); // used to scaleDown(2), killing the new generation
+
+        $this->assertSame(2, $pool->countActive(), 'the fresh generation must survive the post-reload tick');
+        $this->assertSame(2, $pool->countIdle(), 'the fresh generation must remain dispatchable');
+        $this->assertNotNull($pool->getAvailable());
+
+        $pool->stop();
+    }
+
     public function testDoesNothingWhenThereIsIdleCapacityForTheQueue(): void
     {
         $pool = new WorkerPool(2, new FakeWorkerLauncher());

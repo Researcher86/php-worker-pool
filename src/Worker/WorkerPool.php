@@ -6,6 +6,8 @@ namespace App\Worker;
 
 use App\Protocol\Message;
 use App\Protocol\MessageType;
+use App\Support\Logger;
+use App\Support\NullLogger;
 
 final class WorkerPool
 {
@@ -48,6 +50,10 @@ final class WorkerPool
         int $workerCount,
         private readonly WorkerLauncher $launcher = new ForkedWorkerLauncher(),
         private readonly int $maxWorkers = PHP_INT_MAX,
+        // Where the recovered-but-otherwise-invisible failures below (launch
+        // failures this class deliberately survives instead of rethrowing)
+        // get recorded, so they're at least diagnosable after the fact.
+        private readonly Logger $logger = new NullLogger(),
     ) {
         try {
             for ($i = 0; $i < $workerCount; $i++) {
@@ -85,6 +91,31 @@ final class WorkerPool
         return count(array_filter($this->workers, static fn (WorkerProcess $w) => $w->getState() === WorkerState::BUSY));
     }
 
+    /**
+     * The pool's forward-looking size: workers that are staying, i.e. not
+     * retiring, not STOPPING, not DEAD. Differs from count() only during
+     * transitions - right after reload() the pool briefly holds both the new
+     * generation and the outgoing one, and count() sees them all. Scaling
+     * decisions must use this one: judging "too many workers" by count()
+     * during that window would scale away the NEW generation, since the
+     * outgoing one is already excluded from scaleDown()'s candidates.
+     */
+    public function countActive(): int
+    {
+        $active = 0;
+
+        foreach ($this->workers as $pid => $worker) {
+            if (!isset($this->retiringPids[$pid])
+                && $worker->getState() !== WorkerState::STOPPING
+                && $worker->getState() !== WorkerState::DEAD
+            ) {
+                $active++;
+            }
+        }
+
+        return $active;
+    }
+
     public function totalCrashed(): int
     {
         return $this->totalCrashed;
@@ -105,14 +136,27 @@ final class WorkerPool
         return null;
     }
 
-    public function write(int $workerId, Message $message): WorkerProcess
+    /**
+     * Dispatches $message to $workerId, or returns null if that worker can
+     * no longer take it: with async SIGCHLD, a worker can be reaped (or
+     * marked retiring) between the caller's getAvailable() and this call -
+     * the deferred section makes the check-and-dispatch atomic against the
+     * reaper, and null tells the caller to simply pick another worker.
+     */
+    public function write(int $workerId, Message $message): ?WorkerProcess
     {
-        $worker = $this->workers[$workerId];
+        return $this->withSigchldDeferred(function () use ($workerId, $message): ?WorkerProcess {
+            $worker = $this->workers[$workerId] ?? null;
 
-        $worker->write($message);
-        $worker->beginRequest($message->id);
+            if ($worker === null || !$worker->isAvailable()) {
+                return null;
+            }
 
-        return $worker;
+            $worker->write($message);
+            $worker->beginRequest($message->id);
+
+            return $worker;
+        });
     }
 
     /**
@@ -162,7 +206,7 @@ final class WorkerPool
                 try {
                     $replacement = $this->launcher->launch();
                     $this->workers[$replacement->getPid()] = $replacement;
-                } catch (\Throwable) {
+                } catch (\Throwable $e) {
                     // Same reasoning as advanceReload(): don't let a failed
                     // launch() propagate out of a SIGCHLD handler. Unlike
                     // there, there's no pid to requeue for a specific retry -
@@ -173,6 +217,7 @@ final class WorkerPool
                     // single waitpid() batch can contain more than one dead
                     // worker, and the rest still need to be reaped and
                     // reported below regardless of this one's outcome.
+                    $this->logger->log('failed to launch a replacement for crashed worker ' . $pid . ': ' . $e->getMessage());
                 }
             }
         }
@@ -206,12 +251,14 @@ final class WorkerPool
      */
     public function reload(): void
     {
-        if ($this->retiringPids !== [] || $this->pendingReload !== []) {
-            return;
-        }
+        $this->withSigchldDeferred(function (): void {
+            if ($this->retiringPids !== [] || $this->pendingReload !== []) {
+                return;
+            }
 
-        $this->pendingReload = array_keys($this->workers);
-        $this->advanceReload();
+            $this->pendingReload = array_keys($this->workers);
+            $this->advanceReload();
+        });
     }
 
     /**
@@ -231,7 +278,7 @@ final class WorkerPool
 
             try {
                 $worker = $this->launcher->launch();
-            } catch (\Throwable) {
+            } catch (\Throwable $e) {
                 // Couldn't launch a replacement right now (e.g. a transient
                 // fork failure under resource pressure) - put the pid back
                 // rather than losing track of it, so a later call (the next
@@ -240,6 +287,7 @@ final class WorkerPool
                 // Not rethrown: this runs from reapDeadWorkers(), which a
                 // SIGCHLD handler calls - an uncaught exception there would
                 // propagate out of signal delivery, not just out of here.
+                $this->logger->log('reload: failed to launch a replacement for worker ' . $pid . ', will retry: ' . $e->getMessage());
                 array_unshift($this->pendingReload, $pid);
 
                 break;
@@ -249,7 +297,7 @@ final class WorkerPool
             $this->retiringPids[$pid] = true;
         }
 
-        $this->retireIdleWorkers();
+        $this->doRetireIdleWorkers();
     }
 
     /**
@@ -261,6 +309,11 @@ final class WorkerPool
      * request.
      */
     public function retireIdleWorkers(): void
+    {
+        $this->withSigchldDeferred($this->doRetireIdleWorkers(...));
+    }
+
+    private function doRetireIdleWorkers(): void
     {
         foreach (array_keys($this->retiringPids) as $pid) {
             $worker = $this->workers[$pid] ?? null;
@@ -304,20 +357,24 @@ final class WorkerPool
      */
     public function scaleUp(int $count): int
     {
-        $launched = 0;
+        return $this->withSigchldDeferred(function () use ($count): int {
+            $launched = 0;
 
-        for ($i = 0; $i < $count; $i++) {
-            try {
-                $worker = $this->launcher->launch();
-            } catch (\Throwable) {
-                break;
+            for ($i = 0; $i < $count; $i++) {
+                try {
+                    $worker = $this->launcher->launch();
+                } catch (\Throwable $e) {
+                    $this->logger->log(sprintf('scale-up stopped early at %d of %d workers: %s', $launched, $count, $e->getMessage()));
+
+                    break;
+                }
+
+                $this->workers[$worker->getPid()] = $worker;
+                $launched++;
             }
 
-            $this->workers[$worker->getPid()] = $worker;
-            $launched++;
-        }
-
-        return $launched;
+            return $launched;
+        });
     }
 
     /**
@@ -333,24 +390,26 @@ final class WorkerPool
      */
     public function scaleDown(int $count): int
     {
-        $marked = 0;
+        return $this->withSigchldDeferred(function () use ($count): int {
+            $marked = 0;
 
-        foreach ($this->workers as $pid => $worker) {
-            if ($marked >= $count) {
-                break;
+            foreach ($this->workers as $pid => $worker) {
+                if ($marked >= $count) {
+                    break;
+                }
+
+                if (isset($this->retiringPids[$pid]) || !$worker->isAvailable()) {
+                    continue;
+                }
+
+                $this->retiringPids[$pid] = true;
+                $marked++;
             }
 
-            if (isset($this->retiringPids[$pid]) || !$worker->isAvailable()) {
-                continue;
-            }
+            $this->doRetireIdleWorkers();
 
-            $this->retiringPids[$pid] = true;
-            $marked++;
-        }
-
-        $this->retireIdleWorkers();
-
-        return $marked;
+            return $marked;
+        });
     }
 
     /**
@@ -363,6 +422,11 @@ final class WorkerPool
      * that didn't happen.
      */
     public function stop(float $timeoutSeconds = 5.0): void
+    {
+        $this->withSigchldDeferred(fn () => $this->doStop($timeoutSeconds));
+    }
+
+    private function doStop(float $timeoutSeconds): void
     {
         $this->accepting = false;
 
@@ -436,6 +500,35 @@ final class WorkerPool
             if ($worker->getState() !== WorkerState::DEAD) {
                 $worker->markDead();
             }
+        }
+    }
+
+    /**
+     * Runs $operation with SIGCHLD delivery deferred - blocked, not ignored:
+     * one arriving meanwhile is delivered the moment the mask is restored.
+     *
+     * With pcntl_async_signals(true) (how Master runs), the SIGCHLD handler
+     * - which calls reapDeadWorkers(), mutating $workers and the retiring
+     * bookkeeping - can otherwise fire between ANY two statements here: in
+     * the middle of stop()'s iteration over $workers, between scaleDown()
+     * marking a pid retiring and actually retiring it, and so on. Worse,
+     * stop()'s own waitpid() loop would compete with the handler's for the
+     * same child exits, making its $awaiting count miss workers the handler
+     * reaped first. Deferring delivery for the duration of one mutating
+     * operation makes each of them atomic with respect to the reaper.
+     *
+     * @template T
+     * @param callable(): T $operation
+     * @return T
+     */
+    private function withSigchldDeferred(callable $operation): mixed
+    {
+        pcntl_sigprocmask(SIG_BLOCK, [SIGCHLD], $previous);
+
+        try {
+            return $operation();
+        } finally {
+            pcntl_sigprocmask(SIG_SETMASK, $previous);
         }
     }
 }

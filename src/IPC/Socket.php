@@ -9,20 +9,27 @@ use App\Protocol\Message;
 use App\Protocol\MessageDecoder;
 use App\Protocol\MessageEncoder;
 
-final readonly class Socket
+final class Socket
 {
+    // Set once write() gives up on a frame partway through. A half-written
+    // frame has no recovery: the peer's decoder is waiting mid-frame, and
+    // any bytes written after it would be parsed as the REST of that frame,
+    // not as a new one - so once this is set, every further write() is a
+    // no-op instead of feeding the peer garbage.
+    private bool $broken = false;
+
     public function __construct(
         /** @var resource */
-        private mixed $socket,
-        private MessageEncoder $encoder = new MessageEncoder(),
-        private MessageDecoder $decoder = new MessageDecoder(),
+        private readonly mixed $socket,
+        private readonly MessageEncoder $encoder = new MessageEncoder(),
+        private readonly MessageDecoder $decoder = new MessageDecoder(),
         // Client sockets are non-blocking (UnixSocketServer::accept()) - a
         // full kernel send buffer makes fwrite() return fewer bytes than
         // asked instead of blocking for room, so write() below has to keep
         // retrying. Bounds how long a single slow/stuck peer can stall the
         // rest of write()'s caller (the single-threaded Master) rather than
         // waiting on it forever.
-        private float $writeTimeoutSeconds = 5.0,
+        private readonly float $writeTimeoutSeconds = 5.0,
     ) {
     }
 
@@ -106,6 +113,10 @@ final readonly class Socket
 
     public function write(Message $message): void
     {
+        if ($this->broken) {
+            return; // an earlier write left the stream mid-frame - see markBroken()
+        }
+
         $data = $this->encoder->encode($message);
         $length = strlen($data);
         $offset = 0;
@@ -120,6 +131,8 @@ final readonly class Socket
             $written = @fwrite($this->socket, substr($data, $offset));
 
             if ($written === false) {
+                $this->markBroken();
+
                 return;
             }
 
@@ -137,7 +150,12 @@ final readonly class Socket
             // socket to become writable again rather than busy-spinning
             // fwrite() in the meantime.
             if (microtime(true) >= $deadline) {
-                return; // peer isn't draining its buffer fast enough - give up, same as a dead one
+                // Peer isn't draining its buffer fast enough - give up, same
+                // as a dead one. The frame is half-sent, so the stream is
+                // unrecoverable from here on, not just this one write.
+                $this->markBroken();
+
+                return;
             }
 
             $write = [$this->socket];
@@ -145,6 +163,35 @@ final readonly class Socket
             $except = [];
             @stream_select($read, $write, $except, 1);
         }
+    }
+
+    /**
+     * Single non-blocking write attempt with no retry or framing of its own.
+     * For callers that keep their own write buffer and retry on writability
+     * events instead of blocking (see ClientConnection) - Socket::write()
+     * above stays the simple bounded-blocking variant for everyone else.
+     *
+     * @return int|null bytes accepted by the kernel (possibly 0 when the
+     *         send buffer is full), or null if the peer is gone entirely
+     */
+    public function writeChunk(string $data): ?int
+    {
+        $written = @fwrite($this->socket, $data);
+
+        return $written === false ? null : $written;
+    }
+
+    /**
+     * Stops all future writes and half-closes the connection: shutting down
+     * just the sending side makes the peer's next read see clean EOF - for
+     * a worker, its signal to exit; for a client, "connection closed" - which
+     * is strictly better than a desynced stream it would misparse.
+     */
+    private function markBroken(): void
+    {
+        $this->broken = true;
+
+        @stream_socket_shutdown($this->socket, STREAM_SHUT_WR);
     }
 
     public function close(): void

@@ -51,7 +51,14 @@ final class Autoscaler
             return;
         }
 
+        // count() for the process ceiling (maxWorkers caps LIVE processes,
+        // outgoing ones included); countActive() for the floor - right after
+        // a reload() the pool briefly holds both generations, and judging
+        // "too many idle workers" by count() would scale away the NEW
+        // generation (the outgoing one is already excluded from
+        // scaleDown()'s candidates, so it can only pick the fresh workers).
         $total = $this->pool->count();
+        $active = $this->pool->countActive();
         // countIdle(), not count() - countBusy(): a retiring (STOPPING)
         // worker is neither busy nor available for dispatch, but count()
         // still includes it until reapDeadWorkers() catches up - subtracting
@@ -67,8 +74,8 @@ final class Autoscaler
         }
 
         // Nothing queued and workers sitting idle above the floor - low load.
-        if ($this->queue->isEmpty() && $idle > 0 && $total > $this->minWorkers) {
-            $retired = $this->pool->scaleDown(min($this->step, $idle, $total - $this->minWorkers));
+        if ($this->queue->isEmpty() && $idle > 0 && $active > $this->minWorkers) {
+            $retired = $this->pool->scaleDown(min($this->step, $idle, $active - $this->minWorkers));
 
             if ($retired > 0) {
                 $this->lastScaledAt = $now;

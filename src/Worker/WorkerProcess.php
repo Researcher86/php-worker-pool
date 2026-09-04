@@ -76,6 +76,14 @@ final class WorkerProcess
 
     public function finishRequest(): void
     {
+        // An async SIGCHLD reap can mark this worker DEAD between its
+        // response being read and this call - crash detection got there
+        // first (and already cleared the request), so there's nothing left
+        // to finish. Tolerating it beats throwing from a timing window.
+        if ($this->state === WorkerState::DEAD) {
+            return;
+        }
+
         $this->assertTransitions([WorkerState::BUSY]);
 
         $this->currentRequestId = null;

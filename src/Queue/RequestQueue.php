@@ -59,12 +59,6 @@ final class RequestQueue
         return $this->maxSize !== null && $this->size() >= $this->maxSize;
     }
 
-    /** Whether $additional more requests would still fit within maxSize. */
-    public function hasCapacityFor(int $additional): bool
-    {
-        return $this->maxSize === null || $this->size() + $additional <= $this->maxSize;
-    }
-
     public function recordRejection(): void
     {
         $this->rejectedCount++;

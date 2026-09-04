@@ -9,6 +9,7 @@ use App\Protocol\Message;
 use App\Protocol\MessageType;
 use App\Sdk\ConnectionFailedException;
 use App\Sdk\RequestTimedOutException;
+use App\Sdk\ServerErrorException;
 use App\Sdk\WorkerPoolClient;
 use PHPUnit\Framework\TestCase;
 
@@ -97,6 +98,31 @@ final class WorkerPoolClientTest extends TestCase
         ], $response);
 
         pcntl_waitpid($pid, $status);
+    }
+
+    /**
+     * An ERROR from the server (overloaded, timed out server-side, worker
+     * crashed, ...) is a refusal, not a result - call() used to return its
+     * payload as if the request had succeeded, making every caller
+     * responsible for remembering to check for an 'error' key.
+     */
+    public function testServerErrorResponseThrowsInsteadOfReturningItsPayload(): void
+    {
+        $pid = $this->forkServer(function (Socket $socket, Message $request): void {
+            $socket->write(new Message(MessageType::ERROR, $request->id, ['error' => 'server_overloaded']));
+        });
+
+        $client = new WorkerPoolClient($this->path);
+
+        try {
+            $client->call('calculate', ['a' => 1, 'b' => 2]);
+            $this->fail('an ERROR response must throw, not be returned as a result');
+        } catch (ServerErrorException $e) {
+            $this->assertSame('server_overloaded', $e->error);
+            $this->assertSame(['error' => 'server_overloaded'], $e->payload);
+        } finally {
+            pcntl_waitpid($pid, $status);
+        }
     }
 
     public function testConnectionFailureThrowsConnectionFailedException(): void

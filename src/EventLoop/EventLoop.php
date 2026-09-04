@@ -5,14 +5,16 @@ declare(strict_types=1);
 namespace App\EventLoop;
 
 /**
- * Minimal reactor: components register a readable resource plus a callback,
- * and the loop multiplexes a single stream_select() across every registered
- * resource, invoking the matching callback for each one that became readable.
+ * Minimal reactor: components register a readable (or writable) resource plus
+ * a callback, and the loop multiplexes a single stream_select() across every
+ * registered resource, invoking the matching callback for each one that
+ * became ready.
  *
  * A resource can't be used as an array key directly, so every method keys
- * its two maps by `(int) $resource` — PHP's stream resources expose a stable
+ * its maps by `(int) $resource` — PHP's stream resources expose a stable
  * integer id for exactly this purpose, valid for as long as the resource
- * stays open. $resources and $handlers are kept in lockstep by that same id.
+ * stays open. Each resources map is kept in lockstep with its handlers map
+ * by that same id.
  */
 final class EventLoop
 {
@@ -21,6 +23,12 @@ final class EventLoop
 
     /** @var array<int, callable(): void> */
     private array $handlers = [];
+
+    /** @var array<int, resource> */
+    private array $writeResources = [];
+
+    /** @var array<int, callable(): void> */
+    private array $writeHandlers = [];
 
     /** @param resource $resource */
     public function addReadable(mixed $resource, callable $onReadable): void
@@ -39,13 +47,39 @@ final class EventLoop
         unset($this->resources[$id], $this->handlers[$id]);
     }
 
+    /**
+     * Registers interest in a resource becoming WRITABLE - i.e. its kernel
+     * send buffer having room again. Unlike readable interest, this is meant
+     * to be short-lived: register while a write buffer has unsent bytes,
+     * remove as soon as it drains (see ClientConnection) - a writable socket
+     * with nothing to send would otherwise wake the loop constantly, since
+     * "writable" is a socket's normal state.
+     *
+     * @param resource $resource
+     */
+    public function addWritable(mixed $resource, callable $onWritable): void
+    {
+        $id = (int) $resource;
+
+        $this->writeResources[$id] = $resource;
+        $this->writeHandlers[$id] = $onWritable;
+    }
+
+    /** @param resource $resource */
+    public function removeWritable(mixed $resource): void
+    {
+        $id = (int) $resource;
+
+        unset($this->writeResources[$id], $this->writeHandlers[$id]);
+    }
+
     public function hasReadable(): bool
     {
         return $this->resources !== [];
     }
 
     /**
-     * Blocks until at least one registered resource becomes readable, then
+     * Blocks until at least one registered resource becomes ready, then
      * invokes the handler registered for each one that did. Returns
      * immediately without blocking if nothing is currently registered —
      * callers rely on that to know there's nothing left worth waiting for.
@@ -62,23 +96,23 @@ final class EventLoop
      */
     public function tick(?float $timeoutSeconds = null): void
     {
-        if ($this->resources === []) {
+        if ($this->resources === [] && $this->writeResources === []) {
             return;
         }
 
         $read = array_values($this->resources);
-        $write = [];
+        $write = array_values($this->writeResources);
         $except = [];
 
         // The `@` suppresses the "Interrupted system call" warning
         // stream_select() raises if a signal arrives mid-call (Master
         // relies on exactly that to wake up and check its shutdown flag on
-        // SIGINT/SIGTERM). On that path $read is left unchanged — still
-        // every resource, not just the ready ones — since the call never
-        // completed; that's harmless here, each handler independently
-        // no-ops when there's nothing actually waiting for it. A genuine
-        // timeout (no activity, no signal), by contrast, correctly leaves
-        // $read empty.
+        // SIGINT/SIGTERM). On that path $read/$write are left unchanged —
+        // still every resource, not just the ready ones — since the call
+        // never completed; that's harmless here, each handler independently
+        // no-ops when there's nothing actually waiting for it (a write
+        // handler's flush attempt just writes 0 bytes). A genuine timeout
+        // (no activity, no signal), by contrast, correctly leaves both empty.
         if ($timeoutSeconds === null) {
             @stream_select($read, $write, $except, null);
         } else {
@@ -88,14 +122,22 @@ final class EventLoop
             @stream_select($read, $write, $except, $seconds, $microseconds);
         }
 
-        // stream_select() rewrites $read in place to keep only the resources
-        // that are actually ready, so this only invokes handlers for those
-        // (or, on an interrupted call, every resource — see above).
+        // stream_select() rewrites $read/$write in place to keep only the
+        // resources that are actually ready, so this only invokes handlers
+        // for those (or, on an interrupted call, every resource — see above).
         foreach ($read as $resource) {
             $id = (int) $resource;
 
             if (isset($this->handlers[$id])) {
                 ($this->handlers[$id])();
+            }
+        }
+
+        foreach ($write as $resource) {
+            $id = (int) $resource;
+
+            if (isset($this->writeHandlers[$id])) {
+                ($this->writeHandlers[$id])();
             }
         }
     }

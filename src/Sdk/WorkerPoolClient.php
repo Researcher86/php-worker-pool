@@ -37,6 +37,9 @@ final readonly class WorkerPoolClient
      *
      * @throws ConnectionFailedException  couldn't connect to the socket at all
      * @throws RequestTimedOutException   no response within $timeoutSeconds
+     * @throws ServerErrorException       the server answered with an ERROR
+     *                                    (overloaded, timed out server-side,
+     *                                    worker crashed, ...)
      * @throws ConnectionClosedException  the connection dropped mid-request
      * @throws MalformedMessageException  the response didn't parse
      */
@@ -52,7 +55,18 @@ final readonly class WorkerPoolClient
                 'params' => $params,
             ]));
 
-            return $this->awaitResponse($connection, $id)->payload;
+            $response = $this->awaitResponse($connection, $id);
+
+            // An ERROR is the server refusing or failing the request, not a
+            // result - returning its payload as if it were one would make
+            // every caller responsible for remembering to check.
+            if ($response->type === MessageType::ERROR) {
+                $error = $response->payload['error'] ?? null;
+
+                throw new ServerErrorException(is_string($error) ? $error : 'unknown_error', $response->payload);
+            }
+
+            return $response->payload;
         } finally {
             $connection->close();
         }

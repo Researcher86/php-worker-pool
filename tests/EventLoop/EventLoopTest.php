@@ -48,6 +48,31 @@ final class EventLoopTest extends TestCase
         $this->assertFalse($invoked);
     }
 
+    /**
+     * Writable interest (used by ClientConnection's buffered writes): a
+     * socket with room in its send buffer triggers the handler; once
+     * removed, it never fires again.
+     */
+    public function testTickInvokesWritableHandlerUntilRemoved(): void
+    {
+        [$a, $b] = $this->pair();
+
+        $invoked = 0;
+        $this->loop->addWritable($a, function () use (&$invoked, $a): void {
+            $invoked++;
+            $this->loop->removeWritable($a);
+        });
+
+        $this->loop->tick(0.5); // a fresh socket is immediately writable
+        $this->assertSame(1, $invoked);
+
+        $this->loop->tick(0.1); // nothing registered anymore - returns without invoking
+        $this->assertSame(1, $invoked);
+
+        fclose($a);
+        fclose($b);
+    }
+
     public function testTickInvokesHandlerWhenResourceBecomesReadable(): void
     {
         [$readEnd, $writeEnd] = $this->pair();
