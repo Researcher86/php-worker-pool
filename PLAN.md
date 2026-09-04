@@ -1912,8 +1912,18 @@ return a DTO - its JSON-visible state becomes the response payload. A
 payload that doesn't fit the declared DTO (missing required key, wrong
 type) is answered as `invalid_payload` WITHOUT the handler running -
 distinct from `handler_failed` (the handler itself throwing), so the client
-knows which side to fix. bin/server.php demonstrates both directions
-(CalculateRequest in, CalculateResult out). Covered by `HandlerAdapterTest`
+knows which side to fix.
+
+`HandlerAdapter::hydrate()` is public for the routing case, which is what
+bin/server.php demonstrates: the handler declares `Worker\Request` (the
+conventional `action` + `params` envelope WorkerPoolClient::call() sends),
+matches on the action, and hydrates `$request->params` into that action's
+own DTO - so every action stays an ordinary typed function
+(`calculate(CalculateRequest): CalculateResult`) with the runtime doing the
+deserialization at both ends. A hydration failure inside the handler is
+classified by exception type, not by where it was thrown, so a params
+payload that doesn't fit the ACTION's DTO is still `invalid_payload`.
+Covered by `HandlerAdapterTest` (including the envelope-routing pattern)
 and `PersistentWorkerTest::testDtoTypedHandlerGetsHydratedPayloadAndBadPayloadIsRejected`.
 
 ---

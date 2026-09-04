@@ -1,6 +1,8 @@
 <?php
 
 use App\Master\Master;
+use App\Worker\HandlerAdapter;
+use App\Worker\Request;
 
 require __DIR__ . '/../vendor/autoload.php';
 
@@ -8,18 +10,17 @@ require __DIR__ . '/../vendor/autoload.php';
 // socket path without editing anything; unset, the default path applies.
 $socketPath = getenv('WORKER_POOL_SOCKET');
 
-// Application-level DTOs: the handler below declares CalculateRequest as its
-// parameter, so the runtime hydrates each request's payload array into it
-// before the call (see HandlerAdapter) - a payload that doesn't fit comes
-// back to the client as an invalid_payload error without the handler ever
-// running. Returning a DTO works symmetrically: its public properties become
-// the response payload.
+// Application-level types: each action is an ordinary typed function with
+// its own request DTO, hydrated from $request->params when the action is
+// matched below - a payload that doesn't fit (missing key, wrong type)
+// comes back to the client as invalid_payload, whether the mismatch is in
+// the envelope or in the action's own DTO. Returning a DTO works
+// symmetrically: its public properties become the response payload.
 final readonly class CalculateRequest
 {
-    /** @param array<string, int|float> $params */
     public function __construct(
-        public string $action = '',
-        public array $params = [],
+        public int $a,
+        public int $b,
     ) {
     }
 }
@@ -32,16 +33,23 @@ final readonly class CalculateResult
     }
 }
 
+function calculate(CalculateRequest $request): CalculateResult
+{
+    return new CalculateResult($request->a + $request->b);
+}
+
 // What the workers actually DO, defined here - at server-configuration
-// level - not inside the runtime. Everything else (framing, correlation
-// ids, hydration, the error envelope when a handler throws) is the
-// runtime's job; this closure reaches every worker, including ones forked
-// long after startup, because fork() copies memory.
-$handler = static function (CalculateRequest $request): CalculateResult|array {
+// level - not inside the runtime. The runtime hydrates each payload into
+// the Request envelope (action + params) before the call; the match routes
+// to the action's function, hydrating params into that action's own DTO.
+// Everything else (framing, correlation ids, the error envelope when a
+// handler throws) is the runtime's job; this closure reaches every worker,
+// including ones forked long after startup, because fork() copies memory.
+$handler = static function (Request $request): CalculateResult|array {
     return match ($request->action) {
-        'calculate' => new CalculateResult($request->params['a'] + $request->params['b']),
-        // No action (or an unrecognized one) - echo the params back.
-        default => $request->params,
+        'calculate' => calculate(HandlerAdapter::hydrate(CalculateRequest::class, $request->params)),
+        // No (or an unrecognized) action - answer with an empty payload.
+        default => [],
     };
 };
 

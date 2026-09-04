@@ -71,12 +71,23 @@ final class HandlerAdapter
      * a default may be absent, a class-typed parameter whose value is an
      * array is hydrated recursively.
      *
-     * @param class-string         $class
+     * Public on purpose: besides backing the signature-driven hydration
+     * above, an application handler that routes per action (see Request) can
+     * call it directly to hydrate `$request->params` into the matched
+     * action's own DTO. A PayloadHydrationException thrown from there is
+     * still answered as invalid_payload - WorkerRunner classifies by
+     * exception type, not by where it was thrown.
+     *
+     * @template T of object
+     *
+     * @param class-string<T>      $class
      * @param array<string, mixed> $payload
+     *
+     * @return T
      *
      * @throws PayloadHydrationException
      */
-    private static function hydrate(string $class, array $payload): object
+    public static function hydrate(string $class, array $payload): object
     {
         $constructor = (new \ReflectionClass($class))->getConstructor();
 
