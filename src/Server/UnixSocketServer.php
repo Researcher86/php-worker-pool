@@ -41,33 +41,81 @@ final class UnixSocketServer
     private \Closure $onConnect;
 
     /**
-     * @param string           $path     filesystem path of the socket, e.g. /tmp/php-worker-pool.sock
+     * @param string $path filesystem path of the socket, e.g. /tmp/php-worker-pool.sock
      * @param callable(resource): void $onConnect invoked with each accepted, non-blocking client socket
+     * @param int $mode permission bits for the socket file - who may connect
+     * @param string|null $group group to own the socket, or null to leave it
+     *        as whatever the process's own group is
      */
     public function __construct(
         private readonly string $path,
         private readonly EventLoop $loop,
         callable $onConnect,
+        private readonly int $mode = 0600,
+        private readonly ?string $group = null,
     ) {
         $this->onConnect = \Closure::fromCallable($onConnect);
 
         $this->removeStaleSocketFile();
 
-        $this->server = stream_socket_server(
-            'unix://' . $path,
-            $errno,
-            $errstr,
-            STREAM_SERVER_BIND | STREAM_SERVER_LISTEN,
-            stream_context_create(['socket' => ['backlog' => self::BACKLOG]])
-        );
+        // umask first, chmod after. A Unix socket is a filesystem object and
+        // is created honouring the umask - by default 0755, which means
+        // every local account can connect and submit work. Creating it
+        // restrictively closes the window where it exists at the wrong mode;
+        // the chmod below then sets it exactly, since a umask can only
+        // remove bits.
+        $previousUmask = umask(0777 & ~$this->mode);
+
+        try {
+            $this->server = stream_socket_server(
+                'unix://' . $path,
+                $errno,
+                $errstr,
+                STREAM_SERVER_BIND | STREAM_SERVER_LISTEN,
+                stream_context_create(['socket' => ['backlog' => self::BACKLOG]])
+            );
+        } finally {
+            umask($previousUmask);
+        }
 
         if ($this->server === false) {
             throw new \RuntimeException(sprintf('Failed to start Unix socket server: %s (%d)', $errstr, $errno));
         }
 
+        $this->applyPermissions();
+
         stream_set_blocking($this->server, false);
 
         $this->loop->addReadable($this->server, $this->accept(...));
+    }
+
+    /**
+     * Sets who may talk to the pool.
+     *
+     * The default (0600) is owner-only, because the socket is an unauthenticated
+     * command channel: anything that can connect can submit work to every
+     * worker, and there is no other gate in front of it. The usual production
+     * shape is 0660 with a shared group - the Master under its own account,
+     * PHP-FPM under www-data, both in one group - which is exactly what
+     * php-fpm's own listen.owner / listen.group / listen.mode exist for.
+     *
+     * A failure here is fatal on purpose: carrying on would leave the socket
+     * readable by more of the system than asked for, and a security setting
+     * that silently does not apply is worse than one that was never offered.
+     */
+    private function applyPermissions(): void
+    {
+        if ($this->group !== null && !@chgrp($this->path, $this->group)) {
+            $this->close();
+
+            throw new \RuntimeException(sprintf('Could not set group "%s" on %s', $this->group, $this->path));
+        }
+
+        if (!@chmod($this->path, $this->mode)) {
+            $this->close();
+
+            throw new \RuntimeException(sprintf('Could not set mode %o on %s', $this->mode, $this->path));
+        }
     }
 
     /**

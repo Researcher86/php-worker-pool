@@ -131,6 +131,7 @@ action declares, and a payload that doesn't fit comes back as
 | **Graceful reload** | SIGHUP swaps the whole generation without dropping a connection |
 | **Autoscaling** | grows on queue pressure, shrinks when idle |
 | **Metrics** | SIGUSR1 dumps a snapshot, latency split into queue wait vs execution |
+| **Socket access** | owner-only by default; the socket is an unauthenticated command channel, so its mode is the access control |
 
 ---
 
@@ -156,6 +157,7 @@ them worth returning to.
 | a pool decides to grow or shrink | [`Worker/Autoscaler.php`](src/Worker/Autoscaler.php) |
 | a worker is replaced before it leaks, without dropping its request | [`Worker/RecyclingPolicy.php`](src/Worker/RecyclingPolicy.php) |
 | signals are handled without doing the work inside the handler | [`Master/Master.php`](src/Master/Master.php) |
+| the socket is kept from being world-connectable | [`Server/UnixSocketServer.php`](src/Server/UnixSocketServer.php) |
 | a worker loop stays alive through a handler that throws | [`Worker/WorkerRunner.php`](src/Worker/WorkerRunner.php) |
 | a client keeps several requests in flight at once | [`Sdk/WorkerPoolClient.php`](src/Sdk/WorkerPoolClient.php) |
 

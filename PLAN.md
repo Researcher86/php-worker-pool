@@ -2244,6 +2244,32 @@ thing entirely.
 
 ---
 
+# Post-Phase-20: Socket Permissions
+
+A reader suggested two things: a configurable `max_tasks_per_worker`, and an
+explicit `socket_permissions` setting.
+
+The first already existed - `RecyclingPolicy(maxRequests:)`, on by default
+at 10 000, and it drains the worker rather than killing it, with the
+replacement launched first so capacity never dips. See "Recycling" above.
+
+The second was a real gap, and a security one. `stream_socket_server()`
+creates the socket honouring the umask - 0755 in this project's own
+container - so any local account could connect and submit work to every
+worker. There is no handshake and no identity in the protocol: file
+permissions are the entire access control story.
+
+`socketMode` now defaults to `0600` and `socketGroup` is available for the
+deployment shape that actually needs sharing (Master under its own account,
+PHP-FPM under www-data, one group between them - what php-fpm's
+listen.owner/listen.group/listen.mode exist for). The umask is lowered
+around the bind so the socket is never briefly world-connectable, then
+chmod'ed exactly, and a permission that cannot be applied aborts startup
+rather than being logged - a security setting that silently does not take
+effect is worse than none.
+
+---
+
 # Recommended Implementation Order
 
 ## MVP

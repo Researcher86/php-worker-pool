@@ -60,6 +60,12 @@ final class Master
      */
     public function __construct(
         private readonly string $socketPath = '/tmp/php-worker-pool.sock',
+        // Who may connect. The socket is an unauthenticated command channel -
+        // anything that can reach it can run work on every worker - so the
+        // default is owner-only. Open it to a shared group (0660 + a group
+        // both the Master and PHP-FPM belong to) rather than to everyone.
+        private readonly int $socketMode = 0600,
+        private readonly ?string $socketGroup = null,
         // PLAN.md Phase 20's bounds - the pool starts at the floor and grows
         // under load rather than starting pre-scaled.
         private readonly int $minWorkers = 2,
@@ -135,7 +141,13 @@ final class Master
             fn (string $id) => $this->pendingRequests->markDispatched($id, $this->clock->now()),
         );
         $this->clients = new ClientRegistry($this->loop, $this->handleClientRequest(...), $this->handleClientDisconnect(...));
-        $server = new UnixSocketServer($this->socketPath, $this->loop, $this->clients->accept(...));
+        $server = new UnixSocketServer(
+            $this->socketPath,
+            $this->loop,
+            $this->clients->accept(...),
+            $this->socketMode,
+            $this->socketGroup,
+        );
 
         $this->registerSignalHandling();
 

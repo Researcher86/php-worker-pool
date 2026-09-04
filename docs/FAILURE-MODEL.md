@@ -153,6 +153,38 @@ next step if that bound ever proves too generous.
 
 ---
 
+## Who may connect
+
+The socket is an **unauthenticated command channel**: anything that can
+connect can run work on every worker in the pool. There is no handshake, no
+token, no per-caller identity - the request envelope has an action and
+params, and that is all.
+
+Its file permissions are therefore the only access control there is, and
+they default to `0600` - the account running the Master, nobody else. It
+used to be created at whatever the umask allowed (0755 in this project's own
+container), which let any local account submit work.
+
+The usual deployment shape is the one php-fpm uses for the same problem:
+
+```php
+new Master(
+    socketMode: 0660,          // owner + group
+    socketGroup: 'www-data',   // the group PHP-FPM runs as
+);
+```
+
+Master under its own account, callers under theirs, one shared group between
+them. What you should not do is widen it to `0666` because something could
+not connect - that grants every local process the ability to run arbitrary
+actions against your pool.
+
+A permission that cannot be applied is fatal at startup rather than logged:
+a security setting that silently does not take effect is worse than one that
+was never offered.
+
+---
+
 ## Protocol versioning: none
 
 The frame is `[4-byte length][JSON]`, and the JSON carries `type`, `id` and
