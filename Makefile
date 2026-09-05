@@ -1,5 +1,5 @@
 .PHONY: up down shell build install test analyse bench \
-        run-server run-server-debug run-client run-client-debug
+        run-server run-server-debug run-client run-client-debug run-example
 
 up:
 	docker compose up -d
@@ -38,6 +38,11 @@ run-server-debug: up
 
 run-client: up
 	docker compose exec php php bin/client.php
+
+# Master and client in one process, on a socket path of its own - runs
+# happily alongside run-server rather than fighting it for the default path.
+run-example: up
+	docker compose exec php php bin/client_and_server.php
 
 run-client-debug: up
 	docker compose exec php bash -c "XDEBUG_TRIGGER=1 php bin/client.php"

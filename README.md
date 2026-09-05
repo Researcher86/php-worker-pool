@@ -44,6 +44,10 @@ make run-client
 
 That last line is three requests running on three different workers at once.
 
+Or without the second terminal - `make run-example` forks a Master, asks it
+one question and stops it again, all in one process. See
+[Using it](#using-it).
+
 Then try the things that make it a pool rather than a socket server:
 
 ```bash
@@ -111,6 +115,36 @@ $b = $client->send(new Request('calculate', new CalculateRequest(a: 3, b: 4)));
 Requests are typed at both ends: the payload is hydrated into the DTO the
 action declares, and a payload that doesn't fit comes back as
 `ServerErrorException('invalid_payload')` before the action runs.
+
+### Both ends in one process
+
+[`bin/client_and_server.php`](bin/client_and_server.php) is the two blocks
+above joined up: it forks a Master, waits for it, sends one request, prints
+the answer and shuts it down again.
+
+```bash
+make run-example
+# {"result":30}
+```
+
+Useful as a runnable demo, but the parts worth reading are the ones that
+aren't the demo - embedding a Master in a script that also talks to it has
+three sharp edges, and the file is mostly those:
+
+- **Its own socket path** (`php-worker-pool-demo-<pid>.sock`), not the
+  default one. `UnixSocketServer` deliberately refuses to bind over a socket
+  something is still listening on, so a shared path fails whenever
+  `make run-server` is up - or worse, doesn't fail: the client gets its
+  answer from that *other* Master and the run looks like it worked.
+- **It waits for the socket to accept connections** rather than sleeping a
+  guessed number of seconds, and watches the child while it waits, so a
+  Master that died on startup is reported as that instead of as a
+  connection timeout.
+- **It stops the Master from a `finally`.** A request that throws - a
+  timeout, an unknown action, a crashed pool - would otherwise skip the
+  shutdown and orphan a Master that goes on holding the socket and its
+  workers - a failure that shows up nowhere at the time and breaks the
+  *next* run instead.
 
 ---
 
