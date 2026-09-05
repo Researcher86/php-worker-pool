@@ -16,6 +16,13 @@ Two things that used to live here have moved:
 The file was called PLAN.md while it still was one. Everything in it is
 done, so it is named for what it now contains: the phases.
 
+Each phase ends with a **Tests** section: the tests that hold that phase's
+Definition of Done, named down to the individual test method where one test
+answers for one line of the plan. A phase whose behaviour is only provable
+against a real Master with real forked workers points at
+[tests/E2E/](../tests/E2E/) as well as its unit tests. The whole suite runs
+with `make test`.
+
 # Final Architecture
 
 ```text
@@ -226,6 +233,12 @@ php-worker-pool/
 * [x] Create basic README
 * [x] Define minimum PHP version
 
+## Tests
+
+No tests of its own - this phase produced the harness every other phase is
+asserted with: [phpunit.xml](../phpunit.xml) (a single `unit` suite over the
+whole of `tests/`), run by `make test`.
+
 ---
 
 # Phase 1 — Master ↔ Worker IPC Foundation
@@ -271,6 +284,15 @@ Worker → PONG
 ## Definition of Done
 
 One Master and one Worker can exchange messages successfully.
+
+## Tests
+
+- [tests/IPC/SocketTest.php](../tests/IPC/SocketTest.php) -
+  `testWriteAndReadRoundTripsASimpleMessage` is this phase's PING/PONG
+  exchange over a real `stream_socket_pair()`.
+- [tests/Worker/PersistentWorkerTest.php](../tests/Worker/PersistentWorkerTest.php) -
+  the other half, with a real `pcntl_fork()`: Master writes, the forked
+  child reads, answers, and the answer arrives back.
 
 ---
 
@@ -327,6 +349,16 @@ while ($running) {
 ## Definition of Done
 
 The same Worker can process at least 100 consecutive requests.
+
+## Tests
+
+- [tests/Worker/PersistentWorkerTest.php](../tests/Worker/PersistentWorkerTest.php) -
+  the whole file is this phase. `testWorkerProcessesMultipleConsecutiveRequests`
+  is the Definition of Done (consecutive requests through one forked worker,
+  no exit in between); `testHandlerFailureAnswersWithAnErrorAndTheWorkerSurvives`
+  proves the loop survives a throwing handler;
+  `testWorkerExitsCleanlyWhenMasterClosesConnectionWithoutShutdown` covers
+  the shutdown side.
 
 ---
 
@@ -409,6 +441,15 @@ The protocol correctly handles:
 * [x] large messages
 * [x] malformed messages
 
+## Tests
+
+- [tests/Protocol/MessageCodecTest.php](../tests/Protocol/MessageCodecTest.php) -
+  encoder and decoder round-tripped together, one test per Definition-of-Done
+  checkbox: `testPartialMessageAccumulatesUntilComplete` (partial),
+  `testMultipleMessagesInSingleRead` and `testMessyChunkingProducesAllMessages`
+  (multiple, including frames split at arbitrary byte offsets),
+  `testLargeMessage` (large), `testMalformedJsonThrows` (malformed).
+
 ---
 
 # Phase 4 — Worker Process Abstraction
@@ -480,6 +521,20 @@ STOPPING
 
 The Master can determine which workers are idle and which are busy.
 
+## Tests
+
+- [tests/Worker/WorkerProcessTest.php](../tests/Worker/WorkerProcessTest.php) -
+  the abstraction itself: pid, socket, state, current request id, and
+  `isAvailable()`, which is this phase's Definition of Done ("which workers
+  are idle and which are busy").
+- [tests/Worker/StateTransitionMatrixTest.php](../tests/Worker/StateTransitionMatrixTest.php) -
+  every cell of `WorkerProcess::TRANSITIONS` asserted from the outside,
+  legal and illegal alike, plus `testEveryStateAppearsInTheMatrix` so a
+  state added later cannot skip answering for all five events.
+- [tests/Worker/RecyclingTest.php](../tests/Worker/RecyclingTest.php) - the
+  `DRAINING` state noted above, exercised through the feature it was folded
+  in for.
+
 ---
 
 # Phase 5 — Worker Pool
@@ -547,6 +602,23 @@ testReloadSurvivesALaunchFailureAndKeepsTheWorkerPendingForRetry`,
 `testReapDeadWorkersProcessesTheWholeBatchEvenWhenOneReplacementLaunchFails`,
 and `testScaleUpStopsEarlyWithoutThrowingWhenALaunchFails`.
 
+## Tests
+
+- [tests/Worker/WorkerPoolTest.php](../tests/Worker/WorkerPoolTest.php) -
+  `testStartsRequestedNumberOfWorkers`, `testMultipleWorkersProcessRequestsInParallel`
+  (this phase's Definition of Done) and `testGetAvailableReturnsIdleWorkerThenChangesWhenBusy`.
+  The post-review fixes above are held by
+  `testConstructorStopsAlreadyLaunchedWorkersIfALaterLaunchFails`,
+  `testReloadSurvivesALaunchFailureAndKeepsTheWorkerPendingForRetry`,
+  `testReloadCompletesOnceARetriedLaunchSucceeds`,
+  `testReapDeadWorkersProcessesTheWholeBatchEvenWhenOneReplacementLaunchFails`
+  and `testScaleUpStopsEarlyWithoutThrowingWhenALaunchFails`.
+- Test doubles this and later phases run the pool against, instead of forking:
+  [FakeWorkerLauncher](../tests/Worker/FakeWorkerLauncher.php),
+  [FlakyWorkerLauncher](../tests/Worker/FlakyWorkerLauncher.php) (fails on
+  demand) and [StuckWorkerLauncher](../tests/Worker/StuckWorkerLauncher.php)
+  (never answers).
+
 ---
 
 # Phase 6 — Request Queue
@@ -593,6 +665,16 @@ SplQueue
 ## Definition of Done
 
 Requests wait in the queue when all workers are busy.
+
+## Tests
+
+- [tests/Queue/RequestQueueTest.php](../tests/Queue/RequestQueueTest.php) -
+  `testStartsEmpty`, `testEnqueueIncreasesSize` and
+  `testDequeueReturnsInFifoOrder`. The queue-limit tests in the same file
+  belong to Phase 13.
+- [tests/Dispatcher/DispatcherTest.php](../tests/Dispatcher/DispatcherTest.php) -
+  `testProcessesMoreRequestsThanWorkersThroughTheQueue` is the Definition of
+  Done: requests actually wait when every worker is busy.
 
 ---
 
@@ -669,6 +751,13 @@ dispatch()
 ## Definition of Done
 
 The Worker Pool automatically processes queued requests.
+
+## Tests
+
+- [tests/Dispatcher/DispatcherTest.php](../tests/Dispatcher/DispatcherTest.php) -
+  `testProcessesMoreRequestsThanWorkersThroughTheQueue` (queue drains into
+  workers as they free up) and `testDispatchInvokesOnResponseCallbackAsResponsesArrive`
+  (the event-driven path, not polling).
 
 ---
 
@@ -760,6 +849,19 @@ dead. Client sockets aren't handled yet because they don't exist until
 Phase 9/10 build the Unix socket server; those phases should register their
 sockets with the same `EventLoop` rather than adding a second loop.
 
+## Tests
+
+- [tests/EventLoop/EventLoopTest.php](../tests/EventLoop/EventLoopTest.php) -
+  registration (`testHasReadableReflectsRegistrations`), dispatch to the
+  right source (`testTickInvokesHandlerWhenResourceBecomesReadable`,
+  `testTickInvokesEveryHandlerReadyInTheSameTick`), deregistration
+  (`testRemoveReadableStopsInvokingHandler`), the writable side used by
+  Phase 10's write buffering (`testTickInvokesWritableHandlerUntilRemoved`),
+  and the timed tick Phase 14 sweeps on
+  (`testTickWithTimeoutReturnsWhenNothingBecomesReadable`).
+- [tests/Dispatcher/DispatcherTest.php](../tests/Dispatcher/DispatcherTest.php) -
+  the worker-socket half of the loop, driven through `Dispatcher`.
+
 ---
 
 # Phase 9 — Unix Domain Socket Server
@@ -808,6 +910,18 @@ MASTER
 ## Definition of Done
 
 A separate PHP process can connect to the Master.
+
+## Tests
+
+- [tests/Server/UnixSocketServerTest.php](../tests/Server/UnixSocketServerTest.php) -
+  `testBindsUnixSocketAndAcceptsClient` and `testRemoveSocketFileOnClose`.
+- [tests/Server/SocketPermissionsTest.php](../tests/Server/SocketPermissionsTest.php) -
+  added later, once it was clear the socket is an unauthenticated command
+  channel: owner-only by default, configurable mode, unaffected by the
+  caller's umask, and the umask restored afterwards.
+- [tests/E2E/MasterEndToEndTest.php](../tests/E2E/MasterEndToEndTest.php) -
+  this phase's Definition of Done in its literal form: a *separate* PHP
+  process (`bin/server.php`) connected to over a real socket.
 
 ---
 
@@ -872,6 +986,25 @@ note.
 ## Definition of Done
 
 Multiple clients can connect and disconnect safely.
+
+## Tests
+
+- [tests/Client/ClientRegistryTest.php](../tests/Client/ClientRegistryTest.php) -
+  accept/track/remove, and the "must not crash the Master" half:
+  `testDisconnectedClientIsRemovedWithoutCrashing`,
+  `testMalformedRequestDisconnectsClientWithoutCrashing`,
+  `testTracksMultipleClientsIndependently`, plus the `onDisconnect` hook the
+  post-review fix added (`testOnDisconnectFiresWithTheClientOnCleanDisconnect`,
+  `testOnDisconnectFiresOnAMalformedFrameToo`).
+- [tests/Client/ClientConnectionTest.php](../tests/Client/ClientConnectionTest.php) -
+  the write buffer: a frame larger than the kernel buffer returns
+  immediately and flushes through the loop, and a client that never drains
+  has its backlog capped instead of growing forever.
+- [tests/IPC/SocketTest.php](../tests/IPC/SocketTest.php) - the partial-write
+  bug this phase's "Store write buffer" note describes:
+  `testWriteRetriesUntilTheFullMessageIsWrittenPastTheSendBuffer`,
+  `testWriteGivesUpWithoutThrowingWhenThePeerNeverDrains` and
+  `testAGivenUpWriteBreaksTheSocketInsteadOfDesyncingTheStream`.
 
 ---
 
@@ -970,6 +1103,21 @@ a response to, until Phase 14's 30s timeout eventually swept it. New
 `PendingRequestRegistry::removeByClient()`, called from Phase 10's new
 `ClientRegistry` `onDisconnect` hook, removes it immediately instead.
 
+## Tests
+
+- [tests/Client/PendingRequestRegistryTest.php](../tests/Client/PendingRequestRegistryTest.php) -
+  fresh ids and resolution back to the right client, `testResolveIsOneShot`,
+  `testTwoClientsReusingTheSameOriginalIdDoNotCollide` (the collision case
+  the live run above checked by hand), and
+  `testRemoveByClientRemovesOnlyThatClientsEntriesRegardlessOfDeadline` /
+  `testRemoveByClientReturnsEmptyWhenThatClientHasNoPendingEntries` for the
+  post-review fix.
+- [tests/Client/ClientRegistryTest.php](../tests/Client/ClientRegistryTest.php) -
+  `testConcurrentRequestsGetRoutedBackCorrectlyEvenWhenAnsweredOutOfOrder`:
+  this phase's own #1/#3/#2 diagram, asserted.
+- [tests/E2E/InvariantsTest.php](../tests/E2E/InvariantsTest.php) -
+  `testEveryRequestGetsExactlyOneCorrectAnswer`, against a real Master.
+
 ---
 
 # Phase 12 — PHP Client
@@ -1038,6 +1186,23 @@ real round-trip response; pointing WorkerPoolClient at a socket nothing is
 listening on throws ConnectionFailedException; a server that reads the
 request but never replies throws RequestTimedOutException after the
 configured timeout (see WorkerPoolClientTest).
+
+## Tests
+
+- [tests/Sdk/WorkerPoolClientTest.php](../tests/Sdk/WorkerPoolClientTest.php) -
+  the whole client surface against a forked one-shot server:
+  `testCallSendsRequestAndReturnsDecodedResponsePayload`,
+  `testCallSendsActionAndParamsInThePayload`,
+  `testServerErrorResponseThrowsInsteadOfReturningItsPayload`,
+  `testCallAcceptsAnObjectAsParams`, and the two error paths this phase
+  names - `testConnectionFailureThrowsConnectionFailedException` and
+  `testNoResponseThrowsRequestTimedOutException`.
+- [tests/E2E/MasterEndToEndTest.php](../tests/E2E/MasterEndToEndTest.php) -
+  the same client against the real `bin/server.php`.
+- [tests/Worker/PayloadHydratorTest.php](../tests/Worker/PayloadHydratorTest.php)
+  and `PersistentWorkerTest::testPerActionDtoIsHydratedFromParamsAndABadPayloadIsRejected` -
+  the typed `action`/`params` contract that grew out of this phase's example
+  API later on; see [DECISIONS.md](DECISIONS.md).
 
 ---
 
@@ -1142,6 +1307,18 @@ testRunRejectsABatchLargerThanQueueCapacity`.
 > paragraph above is kept as the record of what the code once did; see
 > [DECISIONS.md](DECISIONS.md#simplification-one-execution-model-not-two).
 
+## Tests
+
+- [tests/Queue/RequestQueueTest.php](../tests/Queue/RequestQueueTest.php) -
+  `testIsNeverFullWithoutAConfiguredLimit`,
+  `testIsFullOnceItReachesTheConfiguredLimit` and
+  `testRejectedCountStartsAtZeroAndTracksRecordRejection`.
+- [tests/Dispatcher/DispatcherTest.php](../tests/Dispatcher/DispatcherTest.php) -
+  `testDispatchRejectsWhenQueueIsFull`: the full queue turns into a rejected
+  request rather than an ever-growing one. (`testRunRejectsABatchLargerThanQueueCapacity`,
+  named in the superseded note above, went away with `Dispatcher::run()`
+  itself.)
+
 ---
 
 # Phase 14 — Request Timeouts
@@ -1206,6 +1383,25 @@ Verified live: a client whose worker never answers gets
 under its own original id after the configured timeout, over a real Unix
 socket connection; the normal (non-timing-out) path was re-checked against
 a real running server afterward to confirm nothing regressed.
+
+## Tests
+
+- [tests/Client/PendingRequestRegistryTest.php](../tests/Client/PendingRequestRegistryTest.php) -
+  the deadline machinery: `testRemoveExpiredReturnsAndRemovesOnlyEntriesPastTheirDeadline`,
+  `testRemoveExpiredIsOneShotAndAccumulatesTimeoutCount`, and
+  `testDrainAllReturnsAndRemovesEverythingRegardlessOfDeadline` (Phase 16
+  uses that one).
+- [tests/EventLoop/EventLoopTest.php](../tests/EventLoop/EventLoopTest.php) -
+  `testTickWithTimeoutReturnsWhenNothingBecomesReadable`: the timed tick
+  that makes the once-a-second sweep possible with zero socket activity.
+- [tests/Sdk/WorkerPoolClientTest.php](../tests/Sdk/WorkerPoolClientTest.php) -
+  `testNoResponseThrowsRequestTimedOutException`, the client-side deadline.
+- [tests/Worker/ExecutionTimeoutTest.php](../tests/Worker/ExecutionTimeoutTest.php) -
+  the pool-side half ("optionally terminate Worker"): a busy worker past the
+  limit is signalled once then escalated, while an idle or draining one is
+  left alone however long it has existed.
+- Both deadline suites move time with [FakeClock](../tests/Support/FakeClock.php)
+  rather than sleeping.
 
 ---
 
@@ -1308,6 +1504,26 @@ normally afterward; unit tests cover both an idle worker crashing
 synthesized worker_crashed response carries the right request id
 (DispatcherTest).
 
+## Tests
+
+- [tests/Worker/WorkerPoolTest.php](../tests/Worker/WorkerPoolTest.php) -
+  the SIGCHLD path: `testReapDeadWorkersRemovesAndReplacesACrashedWorker`
+  (this phase's Definition of Done) and `testTotalCrashedAccumulatesAcrossReapCalls`.
+- [tests/Dispatcher/DispatcherTest.php](../tests/Dispatcher/DispatcherTest.php) -
+  the other, redundant detection path: `testWorkerDyingMidRequestReportsWorkerCrashed`,
+  `testDispatchReportsWorkerCrashViaOnResponse` (the synthesized
+  `worker_crashed` answer carries the right request id) and
+  `testMalformedBytesFromAWorkerAreTreatedAsACrashNotAMasterCrash`.
+- [tests/Worker/ReapRaceTest.php](../tests/Worker/ReapRaceTest.php) - the
+  window `pcntl_async_signals(true)` opens, closed deterministically: a
+  worker reaped between "which worker is free?" and "send it this request".
+- [tests/E2E/ChaosTest.php](../tests/E2E/ChaosTest.php) -
+  `testKillingAWorkerIsRecoveredFrom`, the docker `kill -9` run above turned
+  into a test.
+- [tests/E2E/InvariantsTest.php](../tests/E2E/InvariantsTest.php) -
+  `testARequestWhoseWorkerDiesStillTerminates` and
+  `testRepeatedCrashesNeverGrowThePoolPastItsCeiling`.
+
 ---
 
 # Phase 16 — Graceful Shutdown
@@ -1398,6 +1614,24 @@ Normal shutdown (nothing pending) stays fast and clean, same as before this
 phase. WorkerPoolTest proves stop()'s SIGKILL fallback actually fires
 against a worker that never reads the SHUTDOWN message, rather than hanging.
 
+## Tests
+
+- [tests/Worker/WorkerPoolTest.php](../tests/Worker/WorkerPoolTest.php) -
+  `testStopKillsAWorkerThatNeverRespondsToShutdown`: the SIGKILL fallback
+  fires instead of hanging (run against
+  [StuckWorkerLauncher](../tests/Worker/StuckWorkerLauncher.php)).
+- [tests/Worker/PersistentWorkerTest.php](../tests/Worker/PersistentWorkerTest.php) -
+  `testWorkerExitsCleanlyWhenMasterClosesConnectionWithoutShutdown`, the
+  worker's own side of stopping.
+- [tests/Server/UnixSocketServerTest.php](../tests/Server/UnixSocketServerTest.php) -
+  `testRemoveSocketFileOnClose`.
+- [tests/E2E/MasterEndToEndTest.php](../tests/E2E/MasterEndToEndTest.php) and
+  [tests/E2E/ChaosTest.php](../tests/E2E/ChaosTest.php)
+  (`testShutdownDeliversAcceptedWorkAndCleansUp`) - real SIGTERM, work
+  already accepted still delivered, socket file gone.
+- [tests/E2E/InvariantsTest.php](../tests/E2E/InvariantsTest.php) -
+  `testNothingSurvivesShutdown`: no workers, no socket file, afterwards.
+
 ---
 
 # Phase 17 — Metrics
@@ -1485,6 +1719,22 @@ Verified live: 3 real requests through a running server, then SIGUSR1 -
 the dumped snapshot read Workers Total 4/Idle 4/Busy 0 and Requests Total
 3/Completed 3, matching reality exactly.
 
+## Tests
+
+- [tests/Metrics/MetricsTest.php](../tests/Metrics/MetricsTest.php) -
+  `testFormatMatchesThePlansExampleOutputShape`, asserted against this
+  phase's own Example Output above.
+- [tests/Metrics/MetricsCollectorTest.php](../tests/Metrics/MetricsCollectorTest.php) -
+  `testSnapshotAggregatesFromEachComponent`, the wiring from pool, queue and
+  registries into one snapshot.
+- [tests/Metrics/RequestMetricsTest.php](../tests/Metrics/RequestMetricsTest.php) -
+  the requests_total/completed/failed counters.
+- The per-component sources: `WorkerPoolTest::testCountIdleAndCountBusyReflectWorkerState`
+  and `testTotalCrashedAccumulatesAcrossReapCalls` (worker metrics),
+  `RequestQueueTest::testRejectedCountStartsAtZeroAndTracksRecordRejection`
+  (queue metrics), `PendingRequestRegistryTest::testRemoveExpiredIsOneShotAndAccumulatesTimeoutCount`
+  (timeouts).
+
 ---
 
 # Phase 18 — Multiple Requests Per Connection
@@ -1547,6 +1797,19 @@ The "Future Client API" (`$client->send()->await()`) was explicitly this
 phase's forward-looking sketch rather than part of its Definition of Done,
 and WorkerPoolClient stayed synchronous at the time. It exists now - see
 "Client-side multiplexing" below.
+
+## Tests
+
+- [tests/Client/ClientRegistryTest.php](../tests/Client/ClientRegistryTest.php) -
+  the two tests the Status above refers to:
+  `testMultipleRequestsOnOneConnectionAllReachOnRequest` and
+  `testConcurrentRequestsGetRoutedBackCorrectlyEvenWhenAnsweredOutOfOrder`.
+- [tests/Sdk/WorkerPoolClientTest.php](../tests/Sdk/WorkerPoolClientTest.php) -
+  the `send()`/`await()` API that landed later:
+  `testSendPutsSeveralRequestsInFlightAndAllCollectsThem`,
+  `testHandlesCanBeAwaitedIndividuallyInAnyOrder`,
+  `testAwaitingTheSameHandleTwiceThrows` and
+  `testAFailedRequestAmongSeveralThrowsOnlyForItsOwnHandle`.
 
 ---
 
@@ -1615,6 +1878,22 @@ original set) - not five, not eight left stranded. A separate script proved
 the more important half directly: a request already in flight to a worker
 at the moment of reload() still gets its real response delivered to the
 client once that worker finishes, not a dropped connection.
+
+## Tests
+
+- [tests/Worker/WorkerPoolTest.php](../tests/Worker/WorkerPoolTest.php) -
+  `testReloadReplacesIdleWorkersImmediately`,
+  `testReloadLeavesABusyWorkerAloneUntilItFinishes` (the important half:
+  an in-flight request is not dropped), `testReloadWhileAlreadyRetiringIsANoOp`,
+  and `testReloadDoesNotExceedMaxWorkersWhenPoolIsNearCapacity` plus the two
+  launch-failure retries listed under Phase 5.
+- [tests/Worker/AutoscalerTest.php](../tests/Worker/AutoscalerTest.php) -
+  `testDoesNotScaleDownTheFreshGenerationDuringAReload`, the Phase 19/20
+  interaction.
+- [tests/E2E/ChaosTest.php](../tests/E2E/ChaosTest.php) -
+  `testReloadReplacesEveryWorkerWithoutLosingRequests`: a real SIGHUP to a
+  real Master with requests in flight, which is the live run above made
+  repeatable.
 
 ---
 
@@ -1733,6 +2012,22 @@ instead of relying on a negative timeout trick.
 `Support/IdGenerator` (the sketch's other suggestion) was deliberately not
 added - see "Where the code ended up, and why" in
 [DECISIONS.md](DECISIONS.md).
+
+## Tests
+
+- [tests/Worker/AutoscalerTest.php](../tests/Worker/AutoscalerTest.php) -
+  every branch of `check()`: scale up on a backlog with no idle capacity,
+  the `maxWorkers`/`minWorkers` bounds, no action when idle capacity already
+  covers the queue, scale down when idle sits above the minimum, and the
+  cooldown in both directions (`testCooldownPreventsScalingTwiceInQuickSuccession`,
+  `testCooldownAllowsScalingAgainOnceItElapses` - the one that needed
+  [FakeClock](../tests/Support/FakeClock.php) instead of a real 5s sleep).
+- [tests/Worker/WorkerPoolTest.php](../tests/Worker/WorkerPoolTest.php) -
+  the pool-side mechanics: `testScaleUpAddsWorkers`,
+  `testScaleDownRetiresOnlyIdleWorkersUpToTheRequestedCount`,
+  `testScaleDownReturnsZeroWhenNothingIsIdle`,
+  `testScaleUpStopsEarlyWithoutThrowingWhenALaunchFails`, and the
+  reload-at-the-ceiling regression test named above.
 
 ---
 
