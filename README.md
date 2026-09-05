@@ -1464,6 +1464,30 @@ By implementing the system step by step, the project explores how worker-based r
 
 ---
 
+## Related Projects
+
+### [PHP Concurrency](https://github.com/Researcher86/php-concurrency)
+
+A practical collection of experiments exploring concurrency in PHP:
+
+```text
+Processes
+    ↓
+IPC
+    ↓
+Worker Pools
+    ↓
+Supervision
+    ↓
+Reliability
+    ↓
+Event Loops
+    ↓
+Fibers & Async I/O
+```
+
+---
+
 ## License
 
 MIT
