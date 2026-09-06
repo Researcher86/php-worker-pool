@@ -13,16 +13,17 @@ namespace App\EventLoop;
  * A resource can't be used as an array key directly, so every method keys
  * its maps by `(int) $resource` — PHP's stream resources expose a stable
  * integer id for exactly this purpose, valid for as long as the resource
- * stays open. Each resources map is kept in lockstep with its handlers map
- * by that same id.
+ * stays open. Each direction keeps two maps in lockstep by that same id:
+ * readResources is paired with readHandlers, writeResources with
+ * writeHandlers — register writes to both, deregister unsets from both.
  */
 final class EventLoop
 {
     /** @var array<int, resource> */
-    private array $resources = [];
+    private array $readResources = [];
 
     /** @var array<int, callable(): void> */
-    private array $handlers = [];
+    private array $readHandlers = [];
 
     /** @var array<int, resource> */
     private array $writeResources = [];
@@ -35,8 +36,8 @@ final class EventLoop
     {
         $id = (int) $resource;
 
-        $this->resources[$id] = $resource;
-        $this->handlers[$id] = $onReadable;
+        $this->readResources[$id] = $resource;
+        $this->readHandlers[$id] = $onReadable;
     }
 
     /** @param resource $resource */
@@ -44,7 +45,7 @@ final class EventLoop
     {
         $id = (int) $resource;
 
-        unset($this->resources[$id], $this->handlers[$id]);
+        unset($this->readResources[$id], $this->readHandlers[$id]);
     }
 
     /**
@@ -75,7 +76,7 @@ final class EventLoop
 
     public function hasReadable(): bool
     {
-        return $this->resources !== [];
+        return $this->readResources !== [];
     }
 
     /**
@@ -96,11 +97,11 @@ final class EventLoop
      */
     public function tick(?float $timeoutSeconds = null): void
     {
-        if ($this->resources === [] && $this->writeResources === []) {
+        if ($this->readResources === [] && $this->writeResources === []) {
             return;
         }
 
-        $read = array_values($this->resources);
+        $read = array_values($this->readResources);
         $write = array_values($this->writeResources);
         $except = [];
 
@@ -136,8 +137,8 @@ final class EventLoop
         foreach ($read as $resource) {
             $id = (int) $resource;
 
-            if (isset($this->handlers[$id])) {
-                ($this->handlers[$id])();
+            if (isset($this->readHandlers[$id])) {
+                ($this->readHandlers[$id])();
             }
         }
 
