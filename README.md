@@ -565,12 +565,11 @@ SplQueue
 
 # Worker Lifecycle
 
-Each Worker has a state.
+Each Worker has a state. A forked worker is IDLE right away: its socket is
+created before the fork, so the Master can dispatch to it immediately -
+there is no readiness handshake to wait for.
 
 ```text
-STARTING
-    │
-    ▼
    IDLE ◀─────────┐
     │             │
     ▼             │
@@ -590,7 +589,6 @@ STOPPING
 Possible states:
 
 ```text
-STARTING
 IDLE
 BUSY
 DRAINING

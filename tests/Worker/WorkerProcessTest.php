@@ -21,9 +21,9 @@ final class WorkerProcessTest extends TestCase
         $this->worker = new WorkerProcess(42, new Socket($socket));
     }
 
-    public function testStartsWithStartingState(): void
+    public function testStartsIdleAndReadyForWork(): void
     {
-        $this->assertSame(WorkerState::STARTING, $this->worker->getState());
+        $this->assertSame(WorkerState::IDLE, $this->worker->getState());
         $this->assertSame(42, $this->worker->getPid());
         $this->assertNull($this->worker->getCurrentRequestId());
     }

@@ -123,7 +123,7 @@ final class WorkerPool
         return count($this->workers);
     }
 
-    /** STARTING counts as idle here: it means "never dispatched to yet", not "unavailable". */
+    /** Workers that can take a request right now - see WorkerProcess::isAvailable(). */
     public function countIdle(): int
     {
         return count(array_filter($this->workers, static fn (WorkerProcess $w) => $w->isAvailable()));
@@ -387,7 +387,7 @@ final class WorkerPool
             foreach ($this->workers as $pid => $worker) {
                 // Only workers still in rotation: one already draining is on
                 // its way out anyway, and a STOPPING/DEAD one is gone.
-                if ($worker->isDraining() || !in_array($worker->getState(), [WorkerState::STARTING, WorkerState::IDLE, WorkerState::BUSY], true)) {
+                if ($worker->isDraining() || !in_array($worker->getState(), [WorkerState::IDLE, WorkerState::BUSY], true)) {
                     continue;
                 }
 

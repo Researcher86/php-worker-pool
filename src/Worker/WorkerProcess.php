@@ -11,23 +11,23 @@ use App\Protocol\Message;
  * Master-side handle for one worker process: its pid, its socket, its
  * lifecycle state, and the counters recycling decides on.
  *
- * State machine (see WorkerState):
+ * State machine (see WorkerState). A worker is IDLE from the moment it is
+ * forked: its socket is created before the fork, so it can be dispatched to
+ * straight away - there is no readiness handshake to wait for.
  *
- *   STARTING ──beginRequest()──> BUSY ──finishRequest()──> IDLE
- *      │                          │  ↑____________________/
- *      │                          │        beginRequest()
- *      │                          │
- *      │        drain()           │        drain()
- *      └────────────┬─────────────┴────────────┐
- *                   ▼                          ▼
- *               DRAINING ◀──finishRequest()──DRAINING
- *               (no work)                   (still working)
- *                   │
- *                   │  stop()          (also legal from any state but DEAD,
- *                   ▼                   so shutdown is never blocked)
- *               STOPPING
- *                   │
- *                   ▼
+ *   IDLE ──beginRequest()──> BUSY ──finishRequest()──> IDLE
+ *     │                       │
+ *     │       drain()         │         drain()
+ *     └───────────┬───────────┴────────────┐
+ *                 ▼                        ▼
+ *             DRAINING ◀─finishRequest()─DRAINING
+ *             (no work)                 (still working)
+ *                 │
+ *                 │  stop()          (also legal from any state but DEAD,
+ *                 ▼                   so shutdown is never blocked)
+ *             STOPPING
+ *                 │
+ *                 ▼
  *   any state ──markDead()──> DEAD (terminal, no way out)
  *
  * Two things are tracked separately on purpose: the STATE says whether new
@@ -36,13 +36,11 @@ use App\Protocol\Message;
  * second map for - "no new requests, but leave whatever it's doing alone".
  * A worker drained while BUSY keeps its request id until it answers.
  *
- * "Available" (isAvailable()) means STARTING or IDLE - the two states from
- * which a new request may be dispatched.
+ * "Available" (isAvailable()) means IDLE - the one state a new request may
+ * be dispatched from.
  */
 final class WorkerProcess
 {
-    private const array AVAILABLE_STATES = [WorkerState::STARTING, WorkerState::IDLE];
-
     /**
      * The whole state machine, stated once: event => (state it is legal
      * from => state it leads to). Anything absent is illegal and throws.
@@ -55,7 +53,6 @@ final class WorkerProcess
      *
      *   FROM        dispatch    respond     drain       stop        die
      *   ─────────────────────────────────────────────────────────────────
-     *   STARTING    BUSY        -           DRAINING    STOPPING    DEAD
      *   IDLE        BUSY        -           DRAINING    STOPPING    DEAD
      *   BUSY        -           IDLE        DRAINING    STOPPING    DEAD
      *   DRAINING    -           DRAINING    DRAINING    STOPPING    DEAD
@@ -74,7 +71,6 @@ final class WorkerProcess
      */
     private const array TRANSITIONS = [
         'dispatch' => [
-            'STARTING' => WorkerState::BUSY,
             'IDLE' => WorkerState::BUSY,
         ],
         'respond' => [
@@ -83,7 +79,6 @@ final class WorkerProcess
             'DEAD' => WorkerState::DEAD,
         ],
         'drain' => [
-            'STARTING' => WorkerState::DRAINING,
             'IDLE' => WorkerState::DRAINING,
             'BUSY' => WorkerState::DRAINING,
             'DRAINING' => WorkerState::DRAINING,
@@ -91,14 +86,12 @@ final class WorkerProcess
             'DEAD' => WorkerState::DEAD,
         ],
         'stop' => [
-            'STARTING' => WorkerState::STOPPING,
             'IDLE' => WorkerState::STOPPING,
             'BUSY' => WorkerState::STOPPING,
             'DRAINING' => WorkerState::STOPPING,
             'STOPPING' => WorkerState::STOPPING,
         ],
         'die' => [
-            'STARTING' => WorkerState::DEAD,
             'IDLE' => WorkerState::DEAD,
             'BUSY' => WorkerState::DEAD,
             'DRAINING' => WorkerState::DEAD,
@@ -119,7 +112,7 @@ final class WorkerProcess
     public function __construct(
         private readonly int $pid,
         private readonly Socket $socket,
-        private WorkerState $state = WorkerState::STARTING,
+        private WorkerState $state = WorkerState::IDLE,
         private ?string $currentRequestId = null,
     ) {
     }
@@ -169,12 +162,12 @@ final class WorkerProcess
     }
 
     /**
-     * Whether the worker can currently accept a request or be stopped
-     * (it has not been dispatched to, or is done with its last request).
+     * Whether the worker can currently accept a request or be stopped: it is
+     * working on nothing and is not on its way out.
      */
     public function isAvailable(): bool
     {
-        return in_array($this->state, self::AVAILABLE_STATES, true);
+        return $this->state === WorkerState::IDLE;
     }
 
     /** Whether the worker is working on a request right now, whatever its state. */

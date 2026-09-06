@@ -172,7 +172,7 @@ through to its answer.
           │
           │  while the queue is not empty:
           │      workerId = pool->getAvailable()
-          │          └─ first worker that is STARTING or IDLE,
+          │          └─ first worker that is IDLE,
           │             skipping BUSY, DRAINING, STOPPING and DEAD ones
           │
           │      none available? → return, leave the rest queued
@@ -185,7 +185,7 @@ through to its answer.
           │  │  Gone? return null → pump() requeues and picks another.   │
           │  └───────────────────────────────────────────────────────────┘
           │  worker->write($message)      ← same [len][json] framing
-          │  worker->beginRequest(dispatchId)   STARTING|IDLE ──▶ BUSY
+          │  worker->beginRequest(dispatchId)   IDLE ──▶ BUSY
           ▼
       Dispatcher::watch($worker)
           │

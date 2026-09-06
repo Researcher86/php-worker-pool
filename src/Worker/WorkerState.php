@@ -6,7 +6,6 @@ namespace App\Worker;
 
 enum WorkerState
 {
-    case STARTING;
     case IDLE;
     case BUSY;
     /** Finishing its current request, if any, then leaving - see WorkerProcess::drain(). */

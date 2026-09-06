@@ -25,12 +25,6 @@ final class StateTransitionMatrixTest extends TestCase
     {
         // [from, event, expected state] - null means "must throw".
         $cells = [
-            [WorkerState::STARTING, 'dispatch', WorkerState::BUSY],
-            [WorkerState::STARTING, 'respond', null],
-            [WorkerState::STARTING, 'drain', WorkerState::DRAINING],
-            [WorkerState::STARTING, 'stop', WorkerState::STOPPING],
-            [WorkerState::STARTING, 'die', WorkerState::DEAD],
-
             [WorkerState::IDLE, 'dispatch', WorkerState::BUSY],
             [WorkerState::IDLE, 'respond', null],
             [WorkerState::IDLE, 'drain', WorkerState::DRAINING],
@@ -87,7 +81,7 @@ final class StateTransitionMatrixTest extends TestCase
     }
 
     /**
-     * The table covers all six states - a state added without a row here
+     * The table covers all five states - a state added without a row here
      * fails this test, which is the point of asserting the matrix rather
      * than a handful of paths.
      */
@@ -123,11 +117,8 @@ final class StateTransitionMatrixTest extends TestCase
         $worker = new WorkerProcess(90_000, new Socket($a));
 
         match ($state) {
-            WorkerState::STARTING => null,
-            WorkerState::IDLE => (function () use ($worker): void {
-                $worker->beginRequest('warmup');
-                $worker->finishRequest();
-            })(),
+            // A fresh worker is already IDLE - nothing to drive.
+            WorkerState::IDLE => null,
             WorkerState::BUSY => $worker->beginRequest('req-1'),
             WorkerState::DRAINING => $worker->drain(),
             WorkerState::STOPPING => $worker->stop(),

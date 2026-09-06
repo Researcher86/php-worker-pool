@@ -487,6 +487,14 @@ machine deleted the map and gave worker recycling the same mechanism for
 free. See "Recycling, Benchmarks, Onboarding" below, and README's Worker
 Lifecycle for the current diagram.
 
+**Later removal:** `STARTING` was folded into `IDLE`. It never meant "not
+ready yet" - a worker's socket exists from before the fork, so a freshly
+forked worker can be dispatched to immediately - it only meant "never
+dispatched to yet", which `WorkerProcess::getHandledRequests()` already
+says. Behaviourally the two were one state: every list of states in the pool
+held both side by side, and forgetting one of them is exactly the
+`retireIdleWorkers()` bug recorded under Phase 19 below.
+
 ## Tasks
 
 * [x] Create WorkerProcess class
