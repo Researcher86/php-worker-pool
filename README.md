@@ -97,6 +97,24 @@ $handler = static function (Request $request): Response {
 (new Master(handler: $handler))->run();
 ```
 
+Anything a worker must do once before it can serve - open a database
+connection, prime a cache - goes in `bootstrap`, which runs inside each
+forked worker before it reports READY. Nothing is dispatched to a worker
+that hasn't reported, so no request waits on a cold process:
+
+```php
+$bootstrap = static function (): void {
+    Database::connect(...);   // CREATE it here - see below
+};
+
+(new Master(handler: $handler, bootstrap: $bootstrap))->run();
+```
+
+It has to *create* its resources rather than capture them: a connection
+opened before the pool is built would be one socket inherited by every
+worker, each writing into the others' protocol stream. `bin/server.php` has
+a runnable stub of this.
+
 The client is a plain PHP object - usable from PHP-FPM, CLI, cron, or a
 queue consumer:
 

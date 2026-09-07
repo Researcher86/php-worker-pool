@@ -570,6 +570,15 @@ final class WorkerPool
         );
     }
 
+    /**
+     * How many workers are forked but still warming up - capacity that is
+     * on its way rather than missing (see Autoscaler).
+     */
+    public function countStarting(): int
+    {
+        return count(array_filter($this->workers, static fn (WorkerProcess $w) => $w->isStarting()));
+    }
+
     /** How many workers are on their way out but not stopped yet. */
     public function countDraining(): int
     {

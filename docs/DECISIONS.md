@@ -963,6 +963,24 @@ differs - an execution overrun is a REQUEST that will never finish, a
 bootstrap overrun is the WORKER - so the sweep tells them apart in one
 place, `stuckReason()`, and the log line says which happened.
 
+## The bug it introduced, found by running it
+
+A warm-up makes workers slow to appear, and the Autoscaler read that as
+workers missing. Its scale-up condition was "queue not empty and no idle
+worker" - and a worker in STARTING is not idle, so a queue waiting on a
+bootstrap looked exactly like a queue waiting on too few workers. Measured
+with a 3s warm-up, a floor of 2 and five queued requests: the pool grew to 4
+while its first two workers were still connecting, forked two more that then
+had to do the same expensive bootstrap, and shrank back once everyone
+reported ready. A burst of database connections at precisely the moment a
+deploy is most fragile.
+
+The condition now also requires `countStarting() === 0`: workers warming up
+are capacity ON ITS WAY, not capacity missing, and scaling on top of them
+double-counts the shortfall. Same measurement after the fix: peak 2. This is
+the same reasoning a scheduler uses when it declines to add replicas while
+pods are still Pending.
+
 ## What was NOT taken from the pull idea
 
 **Prefetch** - a worker holding the next request while it answers the

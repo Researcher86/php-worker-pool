@@ -65,8 +65,19 @@ final class Autoscaler
         // countBusy() from that would wrongly count it as spare capacity.
         $idle = $this->pool->countIdle();
 
+        // Workers still warming up are capacity ON ITS WAY, not capacity
+        // missing - and they are not counted as idle, so without this the
+        // scaler reads a queue waiting on a bootstrap as a queue waiting on
+        // too few workers. Measured before this line existed: a pool with a
+        // floor of 2 and a 3s warm-up grew to 4 while its first two workers
+        // were still connecting, forked two more that also had to connect,
+        // and shrank back once they all reported ready - a burst of
+        // database connections at exactly the moment a deploy is at its most
+        // fragile. Wait for what is already coming before asking for more.
+        $starting = $this->pool->countStarting();
+
         // Queue is growing and there's no spare capacity to absorb it.
-        if (!$this->queue->isEmpty() && $idle === 0 && $total < $this->maxWorkers) {
+        if (!$this->queue->isEmpty() && $idle === 0 && $starting === 0 && $total < $this->maxWorkers) {
             $this->pool->scaleUp(min($this->step, $this->maxWorkers - $total));
             $this->lastScaledAt = $now;
 
