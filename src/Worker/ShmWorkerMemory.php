@@ -8,14 +8,15 @@ namespace App\Worker;
  * WorkerMemory backed by what each worker publishes about itself (see
  * SharedTelemetry), rather than by what the Master can observe from outside.
  *
- * Two things this fixes about ProcMemory, which reads /proc/<pid>/statm:
+ * The obvious alternative - and what this replaced - is for the Master to
+ * read /proc/<pid>/statm. Two things are wrong with that:
  *
- * 1. IT WORKS OFF LINUX. /proc is Linux-only, so on macOS or in a container
- *    without it ProcMemory returns null and the memory recycling limit is
- *    silently not enforced at all. A worker publishing its own number needs
- *    nothing from the OS but the shared segment.
+ * 1. IT IS LINUX-ONLY. On macOS, or in a container without /proc, there is
+ *    no reading at all, and the memory recycling limit is silently not
+ *    enforced. A worker publishing its own number needs nothing from the OS
+ *    but the shared segment.
  *
- * 2. IT MEASURES THE RIGHT QUANTITY. statm reports RSS - which includes the
+ * 2. IT MEASURES THE WRONG QUANTITY. statm reports RSS - which includes the
  *    pages a forked worker still shares with the Master, the opcache, and
  *    every mapping the process didn't ask for. What maxMemoryBytes is
  *    actually about is PHP heap growing inside a long-lived worker, and

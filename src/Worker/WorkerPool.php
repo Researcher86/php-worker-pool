@@ -10,6 +10,7 @@ use App\Support\Clock;
 use App\Support\Logger;
 use App\Support\NullLogger;
 use App\Support\SystemClock;
+use InvalidArgumentException;
 use Throwable;
 
 /**
@@ -85,9 +86,21 @@ final class WorkerPool
         private readonly Logger $logger = new NullLogger(),
         // When to replace a worker with a fresh process - off by default.
         private readonly RecyclingPolicy $recycling = new RecyclingPolicy(),
-        private readonly WorkerMemory $memory = new ProcMemory(),
+        // Who can say how much memory a worker is using. Null is the honest
+        // default: nothing in a pool can measure that on its own, so a caller
+        // that wants the memory limit has to supply the source - and one that
+        // doesn't want it pays nothing for the parameter existing.
+        private readonly ?WorkerMemory $memory = null,
         private readonly Clock $clock = new SystemClock(),
     ) {
+        // A memory limit with nothing to measure it is the failure this
+        // guards against: it would be configured, reported, and silently
+        // never enforced - worse than not asking for one at all, because
+        // the configuration says otherwise.
+        if ($recycling->maxMemoryBytes !== null && $memory === null) {
+            throw new InvalidArgumentException('a maxMemoryBytes limit needs a WorkerMemory to read workers with');
+        }
+
         try {
             for ($i = 0; $i < $workerCount; $i++) {
                 $this->register($this->launcher->launch());
@@ -395,7 +408,9 @@ final class WorkerPool
                 $reason = $this->recycling->exhaustedReason(
                     $worker,
                     $now,
-                    $this->recycling->maxMemoryBytes === null ? null : $this->memory->measure($pid),
+                    // Null unless a memory limit is actually set: the
+                    // constructor guarantees a source exists whenever it is.
+                    $this->recycling->maxMemoryBytes === null ? null : $this->memory?->measure($pid),
                 );
 
                 if ($reason === null) {

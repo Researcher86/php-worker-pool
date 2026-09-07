@@ -689,7 +689,6 @@ src/
 │   ├── RecyclingPolicy.php
 │   ├── WorkerMemory.php        # what a worker's memory reading is
 │   ├── ShmWorkerMemory.php     #   ...as the worker itself reports it
-│   ├── ProcMemory.php          #   ...as /proc sees it from outside
 │   ├── SharedTelemetry.php     # the segment, its slots and their seqlock
 │   ├── TelemetrySlot.php       # one worker's write handle into it
 │   ├── WorkerVitals.php
@@ -782,8 +781,8 @@ ever has to wake anybody up.
 
 ## What it fixed
 
-`ProcMemory` reads `/proc/<pid>/statm` - the only way for the Master to
-measure a worker from outside. Two problems, both real:
+The Master used to read `/proc/<pid>/statm` - the only way to measure a
+worker from outside. Two problems, both real:
 
 1. **It is Linux-only.** On macOS, or a container without /proc, it returns
    null and `maxMemoryBytes` is silently never enforced. A recycling limit
@@ -831,6 +830,23 @@ changes the `Request in, Response out` contract that WorkerRunner exists to
 keep fixed. That is a decision about the application contract, not a
 telemetry detail, so it isn't smuggled in here. The execution timeout stays
 what it is: a timer from dispatch.
+
+## No fallback, on purpose
+
+`ProcMemory` survived the first cut as a fallback for hosts without shared
+memory, and then didn't survive review: `ext-shmop` is a hard requirement in
+composer.json, the Master always builds `ShmWorkerMemory`, and the only tests
+that set a memory limit pass their own double. The fallback was code that
+nothing could reach, kept alive by a "what if" the dependency list had
+already answered - and it measured a different quantity from the one the
+limit is about, so reaching it would have been the bug, not the rescue.
+
+What replaced it is a constructor guard rather than another default:
+`WorkerPool` takes `?WorkerMemory` and refuses a `maxMemoryBytes` limit with
+no source to read it from. The failure being designed out is the same one
+/proc used to produce quietly - a limit that is configured, reported in the
+metrics, and never once enforced - except now it is a startup error instead
+of a silence.
 
 ## Cost
 
