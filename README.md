@@ -110,6 +110,10 @@ $result = $client->call(new Request('calculate', new CalculateRequest(a: 10, b: 
 $a = $client->send(new Request('calculate', new CalculateRequest(a: 1, b: 2)));
 $b = $client->send(new Request('calculate', new CalculateRequest(a: 3, b: 4)));
 [$first, $second] = $client->all($a, $b);
+
+// fan-in on a budget: take what answered within 2s total, skip the rest
+$answers = $client->allWithin(2.0, $a, $b);
+$page['orders'] = $answers[0] ?? null;   // present = answered, missing = didn't
 ```
 
 Requests are typed at both ends: the payload is hydrated into the DTO the
@@ -157,6 +161,7 @@ three sharp edges, and the file is mostly those:
 | **Message framing** | length-prefixed frames over a byte stream: partial reads, partial writes, multiple messages per read |
 | **Correlation ids** | responses come back in any order and still reach the right caller |
 | **Multiplexing** | many requests in flight per connection, client side included |
+| **Fan-in on a budget** | `allWithin()` collects what answered inside one total deadline and leaves out the rest, instead of failing the whole group |
 | **Backpressure** | a bounded queue that rejects instead of growing until OOM |
 | **Timeouts** | two of them: a request deadline that answers the client, and an execution limit that kills a handler which will never return |
 | **Crash recovery** | SIGCHLD, the dead worker's request failed, a replacement forked |

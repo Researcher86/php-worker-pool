@@ -337,6 +337,30 @@ Details worth knowing:
 - A dropped connection clears everything in flight (nothing pending could
   ever arrive) and the next `send()` reconnects.
 
+`allWithin()` was added later for the case `all()` deliberately refuses to
+serve: fan-in where a partial answer is worth more than a failure. A page
+built from orders, profile and recommendations should lose the
+recommendations block when that source is slow, not the page.
+
+Two things had to be decided rather than copied from `all()`:
+
+- **A budget for the group, not per request.** Per-request timeouts run from
+  each `send()` independently, so three requests at 5s can keep a caller
+  waiting 5s even though two answered in milliseconds - the slowest sets the
+  pace. `allWithin($seconds, ...)` states the total the caller is willing to
+  spend, which is the number an HTTP handler actually has.
+- **What a missing answer looks like.** Results keep their handle's
+  position, so a missing position IS the signal - no null-filled slots to
+  interpret, and no exception to catch per source. Timeouts and
+  `ServerErrorException` both degrade to "not there"; a dropped connection
+  does not, because nothing in flight can arrive over a socket that is gone
+  and a partial result would then be lying about why it is partial.
+
+Handles the budget didn't cover are abandoned - their deadline is dropped,
+which is what makes a late answer discardable instead of a payload buffered
+forever in a client that a long-lived FPM worker reuses. Awaiting one
+afterwards throws `LogicException`, the same as awaiting twice.
+
 Covered by `WorkerPoolClientTest` (a forked server that reads every request
 before answering any - only possible if the client didn't block on the
 first - plus out-of-order collection, error isolation, and double-await) and

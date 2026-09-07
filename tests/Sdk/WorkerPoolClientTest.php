@@ -125,6 +125,143 @@ final class WorkerPoolClientTest extends TestCase
         $this->fail('Test server never started listening on ' . $this->path);
     }
 
+    /**
+     * Forks a server that reads $count requests off one connection, answers
+     * only what $respond writes, and then holds the connection open until
+     * tearDown kills it.
+     *
+     * Holding it open is the point: a request that is never answered has to
+     * look like SILENCE to the client. A server that exited instead would
+     * close the socket, and the client would see a dropped connection - a
+     * different case entirely, and one allWithin() deliberately does not
+     * degrade away.
+     *
+     * @param Closure(Socket, list<Message>): void $respond
+     */
+    private function forkSilentlyIncompleteServer(int $count, Closure $respond): int
+    {
+        $pid = pcntl_fork();
+        $this->assertNotSame(-1, $pid, 'fork failed');
+
+        if ($pid === 0) {
+            $listener = stream_socket_server('unix://' . $this->path);
+            $connection = stream_socket_accept($listener, 10);
+            $socket = new Socket($connection);
+
+            $requests = [];
+            while (count($requests) < $count) {
+                $requests = [...$requests, ...$socket->read()];
+            }
+
+            $respond($socket, $requests);
+
+            sleep(10);
+
+            exit(0);
+        }
+
+        $this->servers[] = $pid;
+        $this->waitUntilListening();
+
+        return $pid;
+    }
+
+    public function testAllWithinReturnsOnlyWhatAnsweredInsideTheBudget(): void
+    {
+        // The middle request is never answered - the slow third-party source
+        // in a page assembled from three.
+        $this->forkSilentlyIncompleteServer(3, function (Socket $socket, array $requests): void {
+            $socket->write(new Message(MessageType::RESPONSE, $requests[0]->id, ['block' => 'orders']));
+            $socket->write(new Message(MessageType::RESPONSE, $requests[2]->id, ['block' => 'related']));
+        });
+
+        $client = new WorkerPoolClient($this->path);
+        $handles = [
+            $client->send(new Request('fetch', ['what' => 'orders'])),
+            $client->send(new Request('fetch', ['what' => 'recommendations'])),
+            $client->send(new Request('fetch', ['what' => 'related'])),
+        ];
+
+        $started = microtime(true);
+        $answers = $client->allWithin(0.5, ...$handles);
+        $spent = microtime(true) - $started;
+
+        // Positions, not a re-indexed list: the caller has to be able to
+        // tell WHICH block is missing.
+        $this->assertSame([0 => ['block' => 'orders'], 2 => ['block' => 'related']], $answers);
+        $this->assertArrayNotHasKey(1, $answers);
+
+        // The budget bounds the wait, not the per-request timeout (5s by
+        // default) - without a group budget this call would have taken it.
+        $this->assertLessThan(2.0, $spent);
+    }
+
+    /**
+     * A source answering with an ERROR costs its own block and nothing else.
+     * all() would have thrown and lost the two that succeeded.
+     */
+    public function testAllWithinLeavesOutAFailedRequestAndKeepsTheRest(): void
+    {
+        $this->forkSilentlyIncompleteServer(3, function (Socket $socket, array $requests): void {
+            $socket->write(new Message(MessageType::RESPONSE, $requests[0]->id, ['block' => 'orders']));
+            $socket->write(new Message(MessageType::ERROR, $requests[1]->id, ['error' => 'worker_crashed']));
+            $socket->write(new Message(MessageType::RESPONSE, $requests[2]->id, ['block' => 'related']));
+        });
+
+        $client = new WorkerPoolClient($this->path);
+        $handles = [
+            $client->send(new Request('fetch', ['what' => 'orders'])),
+            $client->send(new Request('fetch', ['what' => 'recommendations'])),
+            $client->send(new Request('fetch', ['what' => 'related'])),
+        ];
+
+        $answers = $client->allWithin(1.0, ...$handles);
+
+        $this->assertSame([0 => ['block' => 'orders'], 2 => ['block' => 'related']], $answers);
+    }
+
+    public function testAllWithinReturnsEveryAnswerWhenNoneIsLate(): void
+    {
+        $this->forkPipeliningServer(3, function (Socket $socket, array $requests): void {
+            foreach ($requests as $i => $request) {
+                $socket->write(new Message(MessageType::RESPONSE, $request->id, ['n' => $i]));
+            }
+        });
+
+        $client = new WorkerPoolClient($this->path);
+        $handles = [
+            $client->send(new Request('calculate', ['n' => 0])),
+            $client->send(new Request('calculate', ['n' => 1])),
+            $client->send(new Request('calculate', ['n' => 2])),
+        ];
+
+        $this->assertSame(
+            [['n' => 0], ['n' => 1], ['n' => 2]],
+            $client->allWithin(2.0, ...$handles)
+        );
+    }
+
+    /**
+     * Whatever the budget did not cover stops being the caller's to collect.
+     * Otherwise its late answer would sit buffered forever in a client that
+     * a long-lived FPM worker reuses across requests.
+     */
+    public function testAllWithinAbandonsTheHandlesItDidNotCollect(): void
+    {
+        $this->forkSilentlyIncompleteServer(2, function (Socket $socket, array $requests): void {
+            $socket->write(new Message(MessageType::RESPONSE, $requests[0]->id, ['block' => 'orders']));
+        });
+
+        $client = new WorkerPoolClient($this->path);
+        $answered = $client->send(new Request('fetch', ['what' => 'orders']));
+        $abandoned = $client->send(new Request('fetch', ['what' => 'recommendations']));
+
+        $this->assertSame([0 => ['block' => 'orders']], $client->allWithin(0.3, $answered, $abandoned));
+
+        $this->expectException(LogicException::class);
+        $client->await($abandoned);
+    }
+
     public function testCallSendsRequestAndReturnsDecodedResponsePayload(): void
     {
         $pid = $this->forkServer(function (Socket $socket, Message $request): void {
