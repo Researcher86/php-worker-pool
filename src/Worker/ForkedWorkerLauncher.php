@@ -7,6 +7,8 @@ namespace App\Worker;
 use App\IPC\SocketPair;
 use App\Protocol\Request;
 use App\Protocol\Response;
+use App\Support\Logger;
+use App\Support\NullLogger;
 use App\Worker\Runtime\WorkerRunner;
 use App\Worker\Telemetry\SharedTelemetry;
 use Closure;
@@ -31,10 +33,13 @@ final readonly class ForkedWorkerLauncher implements WorkerLauncher
         // exactly as before, with the Master measuring workers from outside
         // (see SharedTelemetry, ShmWorkerMemory).
         private ?SharedTelemetry $telemetry = null,
+        /** @var (Closure(Logger): void)|null */
         // The application's per-worker warm-up, run in the child before it
         // reports READY (see WorkerRunner). Like $handler, it reaches every
         // worker through fork() - including replacements forked hours later.
         private ?Closure $bootstrap = null,
+        // Passed on to the warm-up so it logs like the rest of the runtime.
+        private Logger $logger = new NullLogger(),
     ) {
     }
 
@@ -92,7 +97,13 @@ final readonly class ForkedWorkerLauncher implements WorkerLauncher
 
             $socketPair->closeMaster();
 
-            $runner = new WorkerRunner($socketPair->getWorkerSocket(), $this->handler, $slot, $this->bootstrap);
+            $runner = new WorkerRunner(
+                $socketPair->getWorkerSocket(),
+                $this->handler,
+                $slot,
+                $this->bootstrap,
+                $this->logger,
+            );
             $runner->run();
 
             exit(0);

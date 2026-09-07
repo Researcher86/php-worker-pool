@@ -123,10 +123,12 @@ final class Master
         // configured (bin/server.php), never inside the runtime. Null falls
         // back to WorkerRunner's echo default.
         private readonly ?Closure $handler = null,
+        /** @var (Closure(Logger): void)|null */
         // Run once inside each worker before it reports READY: the
         // application's warm-up (database connection, primed cache). Until it
         // returns, that worker is STARTING and nothing is dispatched to it -
-        // so a first request never pays for a cold process.
+        // so a first request never pays for a cold process. It is handed the
+        // Logger below, so a warm-up reports where everything else does.
         private readonly ?Closure $bootstrap = null,
         // How long a worker may take to report READY before it is treated as
         // broken and replaced. Without a ceiling, a bootstrap that hangs
@@ -149,7 +151,7 @@ final class Master
         try {
             $this->pool = new WorkerPool(
                 $this->minWorkers,
-                new ForkedWorkerLauncher($this->handler, $telemetry, $this->bootstrap),
+                new ForkedWorkerLauncher($this->handler, $telemetry, $this->bootstrap, $this->logger),
                 maxWorkers: $this->maxWorkers,
                 logger: $this->logger,
                 recycling: $this->recycling,

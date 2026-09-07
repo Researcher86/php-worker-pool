@@ -924,6 +924,12 @@ The corollary for callers: the hook must CREATE its resources, not capture
 them. A closure written as `use ($pdo)` over a connection the Master already
 opened puts the shared-socket problem straight back.
 
+Its signature is `Closure(Logger): void` rather than `Closure(): void`: the
+Master's own logger is inherited through the fork anyway, so handing it over
+costs nothing and means a warm-up reports through the same channel and
+format as the runtime - and can be captured in a test - instead of every
+application reaching for `fwrite(STDERR)` and inventing its own.
+
 ## What it cost elsewhere
 
 **Watching sockets for a worker's whole life.** Registration used to last

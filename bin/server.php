@@ -5,9 +5,10 @@ declare(strict_types=1);
 use App\Contract\Calculate\CalculateAction;
 use App\Contract\Calculate\CalculateRequest;
 use App\Master\Master;
+use App\Protocol\PayloadHydrator;
 use App\Protocol\Request;
 use App\Protocol\Response;
-use App\Protocol\PayloadHydrator;
+use App\Support\Logger;
 
 require __DIR__ . '/../vendor/autoload.php';
 
@@ -59,15 +60,18 @@ $handler = static function (Request $request): Response {
 //
 // A warm-up that hangs (an unreachable database) doesn't cost a slot: past
 // workerBootstrapTimeoutSeconds the worker is terminated and replaced.
-$bootstrap = static function (): void {
+$bootstrap = static function (Logger $logger): void {
     $startedAt = microtime(true);
 
     // The real thing would be something like:
     //     Database::connect('mysql:host=db;dbname=app', $user, $password);
     usleep(250_000);
 
-    fwrite(STDERR, sprintf(
-        "worker %d: warmed up in %.0fms, reporting ready\n",
+    // The Master's own Logger, inherited through fork(): the warm-up reports
+    // through the same channel, in the same format, as everything else the
+    // runtime says - rather than each application picking its own stream.
+    $logger->log(sprintf(
+        'worker %d: warmed up in %.0fms, reporting ready',
         posix_getpid(),
         (microtime(true) - $startedAt) * 1000,
     ));

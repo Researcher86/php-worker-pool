@@ -103,12 +103,17 @@ forked worker before it reports READY. Nothing is dispatched to a worker
 that hasn't reported, so no request waits on a cold process:
 
 ```php
-$bootstrap = static function (): void {
+$bootstrap = static function (Logger $logger): void {
     Database::connect(...);   // CREATE it here - see below
+
+    $logger->log('worker ' . posix_getpid() . ': warmed up');
 };
 
 (new Master(handler: $handler, bootstrap: $bootstrap))->run();
 ```
+
+It is handed the Master's own `Logger`, inherited through `fork()`, so a
+warm-up reports through the same channel and format as the runtime itself.
 
 It has to *create* its resources rather than capture them: a connection
 opened before the pool is built would be one socket inherited by every

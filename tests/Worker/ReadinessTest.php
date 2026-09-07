@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace App\Tests\Worker;
 
 use App\Protocol\MessageType;
+use App\Support\Logger;
 use App\Tests\Support\AwaitsReadyWorkers;
 use App\Tests\Support\FakeClock;
+use App\Tests\Support\FileLogger;
 use App\Worker\ForkedWorkerLauncher;
 use App\Worker\WorkerPool;
 use App\Worker\WorkerState;
@@ -71,18 +73,46 @@ final class ReadinessTest extends TestCase
      */
     public function testBootstrapRunsInEachWorkerAndNeverInTheMaster(): void
     {
-        $pool = new WorkerPool(3, new ForkedWorkerLauncher(null, null, $this->recordOwnPid()));
+        $logger = new FileLogger($this->marker);
+        $bootstrap = static function (Logger $log): void {
+            $log->log((string) posix_getpid());
+        };
+
+        $pool = new WorkerPool(3, new ForkedWorkerLauncher(null, null, $bootstrap, $logger));
 
         try {
             $this->awaitReadyWorkers($pool);
 
-            $ranIn = $this->recordedPids();
+            $ranIn = array_map(intval(...), $logger->lines());
             sort($ranIn);
             $workerPids = array_keys($pool->all());
             sort($workerPids);
 
             $this->assertSame($workerPids, $ranIn, 'the bootstrap must run once per worker, in that worker');
             $this->assertNotContains(posix_getpid(), $ranIn, 'the Master must never run it');
+        } finally {
+            $pool->stop();
+        }
+    }
+
+    /**
+     * The warm-up is handed the Master's own Logger - inherited through
+     * fork() - so what it reports goes where the runtime's own messages go,
+     * and a test can capture it instead of watching stderr.
+     */
+    public function testBootstrapReceivesTheLoggerItCanReportThrough(): void
+    {
+        $logger = new FileLogger($this->marker);
+        $bootstrap = static function (Logger $log): void {
+            $log->log('warmed up');
+        };
+
+        $pool = new WorkerPool(2, new ForkedWorkerLauncher(null, null, $bootstrap, $logger));
+
+        try {
+            $this->awaitReadyWorkers($pool);
+
+            $this->assertSame(['warmed up', 'warmed up'], $logger->lines());
         } finally {
             $pool->stop();
         }
@@ -96,7 +126,7 @@ final class ReadinessTest extends TestCase
     public function testBootstrapFinishesBeforeTheWorkerBecomesDispatchable(): void
     {
         $marker = $this->marker;
-        $bootstrap = static function () use ($marker): void {
+        $bootstrap = static function (Logger $log) use ($marker): void {
             usleep(300_000);
             file_put_contents($marker, 'warm');
         };
@@ -193,21 +223,4 @@ final class ReadinessTest extends TestCase
         $pool->stop();
     }
 
-    /** @return Closure(): void */
-    private function recordOwnPid(): Closure
-    {
-        $marker = $this->marker;
-
-        return static function () use ($marker): void {
-            file_put_contents($marker, posix_getpid() . "\n", FILE_APPEND | LOCK_EX);
-        };
-    }
-
-    /** @return list<int> */
-    private function recordedPids(): array
-    {
-        $contents = (string) @file_get_contents($this->marker);
-
-        return array_map(intval(...), array_filter(explode("\n", trim($contents)), strlen(...)));
-    }
 }

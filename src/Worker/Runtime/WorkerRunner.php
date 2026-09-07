@@ -12,6 +12,8 @@ use App\Protocol\PayloadHydrationException;
 use App\Protocol\PayloadHydrator;
 use App\Protocol\Request;
 use App\Protocol\Response;
+use App\Support\Logger;
+use App\Support\NullLogger;
 use App\Worker\Telemetry\TelemetrySlot;
 use Closure;
 use Throwable;
@@ -48,11 +50,18 @@ final readonly class WorkerRunner
         // - null when the Master couldn't set up shared memory, or in tests
         // that don't care (see SharedTelemetry).
         private ?TelemetrySlot $slot = null,
+        /** @var (Closure(Logger): void)|null */
         // The application's warm-up, run once inside the worker before it
         // announces itself: open the database connection, prime a cache,
         // load whatever a first request should not have to pay for. Null
         // means there is nothing to warm and READY goes out immediately.
+        //
+        // It receives the Master's own Logger, inherited through fork(), so
+        // a warm-up reports through the same channel as everything else the
+        // runtime says - one format, one destination, and swappable in a
+        // test - instead of each application reaching for fwrite(STDERR).
         private ?Closure $bootstrap = null,
+        private Logger $logger = new NullLogger(),
     ) {
         // Default: echo the params back - a sane placeholder until an
         // application provides something real, and what the protocol-level
@@ -69,7 +78,7 @@ final readonly class WorkerRunner
         // like any crash and forks a replacement, instead of the pool filling
         // up with workers that answer every request with handler_failed.
         if ($this->bootstrap !== null) {
-            ($this->bootstrap)();
+            ($this->bootstrap)($this->logger);
         }
 
         // A baseline before any work: until a worker has published once, the

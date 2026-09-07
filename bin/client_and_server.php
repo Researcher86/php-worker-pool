@@ -5,10 +5,11 @@ declare(strict_types=1);
 use App\Contract\Calculate\CalculateAction;
 use App\Contract\Calculate\CalculateRequest;
 use App\Master\Master;
+use App\Protocol\PayloadHydrator;
 use App\Protocol\Request;
 use App\Protocol\Response;
 use App\Sdk\WorkerPoolClient;
-use App\Protocol\PayloadHydrator;
+use App\Support\Logger;
 
 require __DIR__ . '/../vendor/autoload.php';
 
@@ -46,10 +47,10 @@ if ($serverPid === 0) {
     // Watch the output: every worker logs its own pid, and the request below
     // is answered only after one of them has finished warming up - which is
     // the whole point of the handshake, made visible.
-    $bootstrap = static function (): void {
+    $bootstrap = static function (Logger $logger): void {
         usleep(250_000);
 
-        fwrite(STDERR, sprintf("worker %d: warmed up, reporting ready\n", posix_getpid()));
+        $logger->log(sprintf('worker %d: warmed up, reporting ready', posix_getpid()));
     };
 
     // A Master that fails to start must say so and exit non-zero, or the
