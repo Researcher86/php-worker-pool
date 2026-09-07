@@ -7,6 +7,8 @@ namespace App\Worker;
 use App\IPC\SocketPair;
 use App\Protocol\Request;
 use App\Protocol\Response;
+use Closure;
+use RuntimeException;
 
 /**
  * The real WorkerLauncher: forks an OS child process that runs the worker
@@ -18,15 +20,15 @@ use App\Protocol\Response;
  * bin/server.php) reaches every worker - including replacements and
  * scale-ups forked long after startup - without any serialization.
  */
-final class ForkedWorkerLauncher implements WorkerLauncher
+final readonly class ForkedWorkerLauncher implements WorkerLauncher
 {
-    /** @param \Closure(Request): Response|null $handler */
     public function __construct(
-        private readonly ?\Closure $handler = null,
+        /** @var Closure(Request): Response|null */
+        private ?Closure $handler = null,
         // Where forked workers publish their own vitals. Null runs the pool
         // exactly as before, with the Master measuring workers from outside
         // (see SharedTelemetry, ShmWorkerMemory).
-        private readonly ?SharedTelemetry $telemetry = null,
+        private ?SharedTelemetry $telemetry = null,
     ) {
     }
 
@@ -60,7 +62,7 @@ final class ForkedWorkerLauncher implements WorkerLauncher
                 $this->telemetry->release($slot);
             }
 
-            throw new \RuntimeException('fork failed');
+            throw new RuntimeException('fork failed');
         }
 
         if ($pid === 0) {

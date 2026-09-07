@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Queue;
 
 use App\Protocol\Message;
+use SplQueue;
 
 /**
  * FIFO queue of requests awaiting dispatch to a free worker.
@@ -22,16 +23,16 @@ use App\Protocol\Message;
  */
 final class RequestQueue
 {
-    /** @var \SplQueue<Message> */
-    private \SplQueue $queue;
+    /** @var SplQueue<Message> */
+    private SplQueue $queue;
 
     private int $rejectedCount = 0;
 
-    /** @param int|null $maxSize null means unbounded */
     public function __construct(
+        // null means unbounded
         private readonly ?int $maxSize = null,
     ) {
-        $this->queue = new \SplQueue();
+        $this->queue = new SplQueue();
     }
 
     public function enqueue(Message $message): void

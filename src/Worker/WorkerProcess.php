@@ -6,6 +6,7 @@ namespace App\Worker;
 
 use App\IPC\Socket;
 use App\Protocol\Message;
+use LogicException;
 
 /**
  * Master-side handle for one worker process: its pid, its socket, its
@@ -292,7 +293,7 @@ final class WorkerProcess
         $next = self::TRANSITIONS[$event][$this->state->name] ?? null;
 
         if ($next === null) {
-            throw new \LogicException(
+            throw new LogicException(
                 sprintf('Illegal transition: cannot %s a worker in state %s', $event, $this->state->name)
             );
         }

@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace App\Worker;
 
+use ReflectionClass;
+use ReflectionNamedType;
+use TypeError;
+
 /**
  * Builds a DTO out of a payload array via the DTO's constructor: payload
  * keys are matched to parameter names (extra keys ignored), a parameter with
@@ -21,7 +25,7 @@ namespace App\Worker;
  * which WorkerRunner answers as `invalid_payload` - classified by exception
  * type, not by where it was thrown, so both cases look the same to a client.
  */
-final class PayloadHydrator
+final readonly class PayloadHydrator
 {
     /**
      * @template T of object
@@ -35,7 +39,7 @@ final class PayloadHydrator
      */
     public static function hydrate(string $class, array $payload): object
     {
-        $constructor = (new \ReflectionClass($class))->getConstructor();
+        $constructor = (new ReflectionClass($class))->getConstructor();
 
         if ($constructor === null) {
             throw new PayloadHydrationException(sprintf('%s has no constructor to hydrate through', $class));
@@ -58,7 +62,7 @@ final class PayloadHydrator
             $type = $parameter->getType();
 
             // A nested DTO: class-typed parameter fed by a nested array.
-            if ($type instanceof \ReflectionNamedType && !$type->isBuiltin() && is_array($value)) {
+            if ($type instanceof ReflectionNamedType && !$type->isBuiltin() && is_array($value)) {
                 /** @var class-string $nested */
                 $nested = $type->getName();
                 $value = self::hydrate($nested, $value);
@@ -69,7 +73,7 @@ final class PayloadHydrator
 
         try {
             return new $class(...$arguments);
-        } catch (\TypeError $e) {
+        } catch (TypeError $e) {
             // A payload value of the wrong type for a typed parameter - the
             // client's fault, same as a missing key.
             throw new PayloadHydrationException(sprintf('Payload does not fit %s: %s', $class, $e->getMessage()), 0, $e);

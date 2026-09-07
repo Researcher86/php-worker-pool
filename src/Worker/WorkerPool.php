@@ -10,6 +10,7 @@ use App\Support\Clock;
 use App\Support\Logger;
 use App\Support\NullLogger;
 use App\Support\SystemClock;
+use Throwable;
 
 /**
  * Owner of every worker's lifecycle. Nothing else in the system moves a
@@ -91,7 +92,7 @@ final class WorkerPool
             for ($i = 0; $i < $workerCount; $i++) {
                 $this->register($this->launcher->launch());
             }
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             // A launch() partway through (e.g. ForkedWorkerLauncher on a
             // failed fork) throws out of the constructor entirely, so
             // $this never reaches the caller - whichever workers already
@@ -260,7 +261,7 @@ final class WorkerPool
             if ($this->accepting) {
                 try {
                     $this->register($this->launcher->launch());
-                } catch (\Throwable $e) {
+                } catch (Throwable $e) {
                     // Same reasoning as advanceReload(): don't let a failed
                     // launch() propagate out of a SIGCHLD handler. Unlike
                     // there, there's no pid to requeue for a specific retry -
@@ -332,7 +333,7 @@ final class WorkerPool
 
             try {
                 $worker = $this->launcher->launch();
-            } catch (\Throwable $e) {
+            } catch (Throwable $e) {
                 // Couldn't launch a replacement right now (e.g. a transient
                 // fork failure under resource pressure) - put the pid back
                 // rather than losing track of it, so a later call (the next
@@ -406,7 +407,7 @@ final class WorkerPool
                 // pool. It'll be retried next tick, still over its limit.
                 try {
                     $replacement = $this->launcher->launch();
-                } catch (\Throwable $e) {
+                } catch (Throwable $e) {
                     $this->logger->log('recycle: keeping worker ' . $pid . ' - no replacement could be launched: ' . $e->getMessage());
 
                     break;
@@ -547,7 +548,7 @@ final class WorkerPool
             for ($i = 0; $i < $count; $i++) {
                 try {
                     $worker = $this->launcher->launch();
-                } catch (\Throwable $e) {
+                } catch (Throwable $e) {
                     $this->logger->log(sprintf('scale-up stopped early at %d of %d workers: %s', $launched, $count, $e->getMessage()));
 
                     break;

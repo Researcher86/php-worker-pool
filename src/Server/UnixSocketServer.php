@@ -5,13 +5,15 @@ declare(strict_types=1);
 namespace App\Server;
 
 use App\EventLoop\EventLoop;
+use Closure;
+use RuntimeException;
 
 /**
  * Listens on a Unix domain socket and hands accepted client connections to a
  * callback. The listener is registered with a shared EventLoop, so it is
  * multiplexed with worker and client sockets in a single stream_select().
  */
-final class UnixSocketServer
+final readonly class UnixSocketServer
 {
     /**
      * How many pending connections the kernel will hold for us between
@@ -37,24 +39,22 @@ final class UnixSocketServer
     /** @var resource */
     private mixed $server;
 
-    /** @var \Closure(resource): void */
-    private \Closure $onConnect;
+    /** @var Closure(resource): void */
+    private Closure $onConnect;
 
-    /**
-     * @param string $path filesystem path of the socket, e.g. /tmp/php-worker-pool.sock
-     * @param callable(resource): void $onConnect invoked with each accepted, non-blocking client socket
-     * @param int $mode permission bits for the socket file - who may connect
-     * @param string|null $group group to own the socket, or null to leave it
-     *        as whatever the process's own group is
-     */
+    /** @param callable(resource): void $onConnect invoked with each accepted, non-blocking client socket */
     public function __construct(
-        private readonly string $path,
-        private readonly EventLoop $loop,
+        // Filesystem path of the socket, e.g. /tmp/php-worker-pool.sock.
+        private string $path,
+        private EventLoop $loop,
         callable $onConnect,
-        private readonly int $mode = 0600,
-        private readonly ?string $group = null,
+        // Permission bits for the socket file - who may connect.
+        private int $mode = 0600,
+        // Group to own the socket, or null to leave it as whatever the
+        // process's own group is.
+        private ?string $group = null,
     ) {
-        $this->onConnect = \Closure::fromCallable($onConnect);
+        $this->onConnect = Closure::fromCallable($onConnect);
 
         $this->removeStaleSocketFile();
 
@@ -79,7 +79,7 @@ final class UnixSocketServer
         }
 
         if ($this->server === false) {
-            throw new \RuntimeException(sprintf('Failed to start Unix socket server: %s (%d)', $errstr, $errno));
+            throw new RuntimeException(sprintf('Failed to start Unix socket server: %s (%d)', $errstr, $errno));
         }
 
         $this->applyPermissions();
@@ -108,13 +108,13 @@ final class UnixSocketServer
         if ($this->group !== null && !@chgrp($this->path, $this->group)) {
             $this->close();
 
-            throw new \RuntimeException(sprintf('Could not set group "%s" on %s', $this->group, $this->path));
+            throw new RuntimeException(sprintf('Could not set group "%s" on %s', $this->group, $this->path));
         }
 
         if (!@chmod($this->path, $this->mode)) {
             $this->close();
 
-            throw new \RuntimeException(sprintf('Could not set mode %o on %s', $this->mode, $this->path));
+            throw new RuntimeException(sprintf('Could not set mode %o on %s', $this->mode, $this->path));
         }
     }
 

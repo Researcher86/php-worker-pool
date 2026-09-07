@@ -11,6 +11,7 @@ use App\Protocol\Message;
 use App\Protocol\MessageType;
 use App\Protocol\Payload;
 use App\Protocol\Request;
+use LogicException;
 
 /**
  * Client for talking to a running Master over its Unix domain socket - meant
@@ -122,7 +123,7 @@ final class WorkerPoolClient
             if (!isset($this->deadlines[$id])) {
                 // Not on the wire and not buffered: either already
                 // collected, or from a different client instance.
-                throw new \LogicException(sprintf('Nothing pending for request "%s" - already awaited?', $id));
+                throw new LogicException(sprintf('Nothing pending for request "%s" - already awaited?', $id));
             }
 
             $this->readMore($id);

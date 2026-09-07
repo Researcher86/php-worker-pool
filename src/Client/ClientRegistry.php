@@ -9,6 +9,7 @@ use App\IPC\ConnectionClosedException;
 use App\IPC\Socket;
 use App\Protocol\MalformedMessageException;
 use App\Protocol\Message;
+use Closure;
 
 /**
  * Tracks every currently-connected client and keeps each one's socket
@@ -26,11 +27,11 @@ final class ClientRegistry
     /** @var array<int, ClientConnection> */
     private array $clients = [];
 
-    /** @var \Closure(ClientConnection, Message): void */
-    private \Closure $onRequest;
+    /** @var Closure(ClientConnection, Message): void */
+    private Closure $onRequest;
 
-    /** @var \Closure(ClientConnection): void */
-    private \Closure $onDisconnect;
+    /** @var Closure(ClientConnection): void */
+    private Closure $onDisconnect;
 
     /**
      * @param callable(ClientConnection, Message): void $onRequest invoked
@@ -47,8 +48,8 @@ final class ClientRegistry
         callable $onRequest,
         ?callable $onDisconnect = null,
     ) {
-        $this->onRequest = \Closure::fromCallable($onRequest);
-        $this->onDisconnect = \Closure::fromCallable($onDisconnect ?? static function (ClientConnection $client): void {
+        $this->onRequest = Closure::fromCallable($onRequest);
+        $this->onDisconnect = Closure::fromCallable($onDisconnect ?? static function (ClientConnection $client): void {
         });
     }
 

@@ -26,6 +26,9 @@ use App\Worker\RecyclingPolicy;
 use App\Worker\SharedTelemetry;
 use App\Worker\ShmWorkerMemory;
 use App\Worker\WorkerPool;
+use Closure;
+use RuntimeException;
+use Throwable;
 
 final class Master
 {
@@ -115,11 +118,11 @@ final class Master
             maxMemoryBytes: 256 * 1024 * 1024,
         ),
         // The application's request handler, run inside each worker:
-        // \Closure(Worker\Request): Worker\Response. This is where business
+        // Closure(Worker\Request): Worker\Response. This is where business
         // logic enters the system - defined wherever the server is
         // configured (bin/server.php), never inside the runtime. Null falls
         // back to WorkerRunner's echo default.
-        private readonly ?\Closure $handler = null,
+        private readonly ?Closure $handler = null,
     ) {
     }
 
@@ -142,7 +145,7 @@ final class Master
                 memory: new ShmWorkerMemory($telemetry),
                 clock: $this->clock,
             );
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             // The pool failing to launch (a fork that didn't) is the one
             // path out of run() that happens before the try/finally below
             // exists - and a segment is kernel-persistent, so without this
@@ -250,7 +253,7 @@ final class Master
         $pipe = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
 
         if ($pipe === false) {
-            throw new \RuntimeException('Failed to create the signal self-pipe');
+            throw new RuntimeException('Failed to create the signal self-pipe');
         }
 
         [$this->signalRead, $this->signalWrite] = $pipe;

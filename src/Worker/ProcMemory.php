@@ -14,9 +14,9 @@ namespace App\Worker;
  * null rather than an error, because a missing reading must never be able to
  * take down a Master that was only trying to decide whether to recycle.
  */
-final class ProcMemory implements WorkerMemory
+final readonly class ProcMemory implements WorkerMemory
 {
-    private readonly int $pageSize;
+    private int $pageSize;
 
     public function __construct(?int $pageSize = null)
     {

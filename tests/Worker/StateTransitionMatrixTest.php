@@ -7,6 +7,7 @@ namespace App\Tests\Worker;
 use App\IPC\Socket;
 use App\Worker\WorkerProcess;
 use App\Worker\WorkerState;
+use LogicException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
@@ -70,7 +71,7 @@ final class StateTransitionMatrixTest extends TestCase
         $worker = $this->workerIn($from);
 
         if ($expected === null) {
-            $this->expectException(\LogicException::class);
+            $this->expectException(LogicException::class);
             $this->fire($worker, $event);
 
             return;

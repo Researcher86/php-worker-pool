@@ -24,14 +24,12 @@ namespace App\Worker;
  */
 final readonly class RecyclingPolicy
 {
-    /**
-     * @param int|null   $maxRequests    replace after this many completed requests
-     * @param float|null $maxLifetime    replace once the process is this old, in seconds
-     * @param int|null   $maxMemoryBytes replace once its resident set exceeds this
-     */
     public function __construct(
+        // Replace after this many completed requests.
         public ?int $maxRequests = null,
+        // Replace once the process is this old, in seconds.
         public ?float $maxLifetime = null,
+        // Replace once the worker reports using more than this (see WorkerMemory).
         public ?int $maxMemoryBytes = null,
     ) {
     }

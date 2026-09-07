@@ -12,6 +12,8 @@ use App\Sdk\ConnectionFailedException;
 use App\Sdk\RequestTimedOutException;
 use App\Sdk\ServerErrorException;
 use App\Sdk\WorkerPoolClient;
+use Closure;
+use LogicException;
 use PHPUnit\Framework\TestCase;
 
 final class WorkerPoolClientTest extends TestCase
@@ -48,7 +50,7 @@ final class WorkerPoolClientTest extends TestCase
     }
 
     /** Forks a one-shot server: accept one connection, hand its first request to $respond, exit. */
-    private function forkServer(\Closure $respond): int
+    private function forkServer(Closure $respond): int
     {
         $pid = pcntl_fork();
         $this->assertNotSame(-1, $pid, 'fork failed');
@@ -75,9 +77,9 @@ final class WorkerPoolClientTest extends TestCase
      * multiplexing case: nothing can be answered in arrival order by
      * accident, because nothing is answered until every request is in.
      *
-     * @param \Closure(Socket, list<Message>): void $respond
+     * @param Closure(Socket, list<Message>): void $respond
      */
-    private function forkPipeliningServer(int $count, \Closure $respond): int
+    private function forkPipeliningServer(int $count, Closure $respond): int
     {
         $pid = pcntl_fork();
         $this->assertNotSame(-1, $pid, 'fork failed');
@@ -278,7 +280,7 @@ final class WorkerPoolClientTest extends TestCase
 
         $this->assertSame(['result' => 30], $pending->await());
 
-        $this->expectException(\LogicException::class);
+        $this->expectException(LogicException::class);
 
         $pending->await();
 

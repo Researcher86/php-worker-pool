@@ -10,6 +10,8 @@ use App\Protocol\Message;
 use App\Protocol\MessageType;
 use App\Protocol\Request;
 use App\Protocol\Response;
+use Closure;
+use Throwable;
 
 /**
  * The loop a worker process runs for its whole life: read a request, hand it
@@ -32,13 +34,13 @@ use App\Protocol\Response;
  */
 final readonly class WorkerRunner
 {
-    /** @var \Closure(Request): Response */
-    private \Closure $handler;
+    /** @var Closure(Request): Response */
+    private Closure $handler;
 
-    /** @param \Closure(Request): Response|null $handler */
+    /** @param Closure(Request): Response|null $handler */
     public function __construct(
         private Socket $socket,
-        ?\Closure $handler = null,
+        ?Closure $handler = null,
         // Where this worker publishes what only it can measure about itself
         // - null when the Master couldn't set up shared memory, or in tests
         // that don't care (see SharedTelemetry).
@@ -104,7 +106,7 @@ final readonly class WorkerRunner
             // reported distinctly from a handler bug so the caller knows
             // which side to fix.
             return $this->toMessage($request->id, Response::error('invalid_payload'));
-        } catch (\Throwable) {
+        } catch (Throwable) {
             // A handler bug must not kill the worker: crashing here would
             // cost the Master a reap-and-refork and turn one bad request
             // into a worker_crashed for its client, when an error reply

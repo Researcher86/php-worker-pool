@@ -6,6 +6,7 @@ namespace App\Tests\Worker;
 
 use App\Worker\WorkerLauncher;
 use App\Worker\WorkerProcess;
+use RuntimeException;
 
 /**
  * Test double for WorkerLauncher: wraps any other WorkerLauncher (a fake
@@ -36,7 +37,7 @@ final class FlakyWorkerLauncher implements WorkerLauncher
             : $this->calls === $this->failOnCall;
 
         if ($shouldFail) {
-            throw new \RuntimeException('launch failed');
+            throw new RuntimeException('launch failed');
         }
 
         return $this->delegate->launch();

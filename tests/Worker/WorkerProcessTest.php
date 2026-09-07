@@ -7,6 +7,7 @@ namespace App\Tests\Worker;
 use App\IPC\Socket;
 use App\Worker\WorkerProcess;
 use App\Worker\WorkerState;
+use LogicException;
 use PHPUnit\Framework\TestCase;
 
 final class WorkerProcessTest extends TestCase
@@ -49,7 +50,7 @@ final class WorkerProcessTest extends TestCase
     {
         $this->worker->beginRequest('req-1');
 
-        $this->expectException(\LogicException::class);
+        $this->expectException(LogicException::class);
         $this->worker->beginRequest('req-2');
     }
 
@@ -97,7 +98,7 @@ final class WorkerProcessTest extends TestCase
     {
         $this->worker->markDead();
 
-        $this->expectException(\LogicException::class);
+        $this->expectException(LogicException::class);
         $this->worker->stop();
     }
 }

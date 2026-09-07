@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Sdk;
 
+use RuntimeException;
+
 /**
  * The Master answered the request with an ERROR message instead of a
  * response: server_overloaded (backpressure), request_timeout (the worker
@@ -14,11 +16,11 @@ namespace App\Sdk;
  * treat "the server refused" as data. $error carries the machine-readable
  * code above; $payload the full error payload for anything extra.
  */
-final class ServerErrorException extends \RuntimeException
+final class ServerErrorException extends RuntimeException
 {
-    /** @param array<string, mixed> $payload */
     public function __construct(
         public readonly string $error,
+        /** @var array<string, mixed> */
         public readonly array $payload = [],
     ) {
         parent::__construct(sprintf('Server answered with error "%s"', $error));

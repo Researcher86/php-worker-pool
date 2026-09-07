@@ -14,6 +14,7 @@ use App\Worker\ForkedWorkerLauncher;
 use App\Worker\WorkerPool;
 use App\Worker\WorkerState;
 use PHPUnit\Framework\TestCase;
+use RuntimeException;
 
 final class WorkerPoolTest extends TestCase
 {
@@ -41,7 +42,7 @@ final class WorkerPoolTest extends TestCase
         try {
             new WorkerPool(5, $launcher);
             $this->fail('expected the launch failure to propagate out of the constructor');
-        } catch (\RuntimeException $e) {
+        } catch (RuntimeException $e) {
             $this->assertSame('launch failed', $e->getMessage());
         }
 

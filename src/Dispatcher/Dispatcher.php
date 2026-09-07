@@ -12,6 +12,7 @@ use App\Protocol\MessageType;
 use App\Queue\RequestQueue;
 use App\Worker\WorkerPool;
 use App\Worker\WorkerProcess;
+use Closure;
 
 /**
  * Event-driven bridge between the RequestQueue and the WorkerPool.
@@ -28,13 +29,13 @@ use App\Worker\WorkerProcess;
  * everything the batch API did is expressible as dispatch() + ticking the
  * loop until onResponse has delivered what you're waiting for.
  */
-final class Dispatcher
+final readonly class Dispatcher
 {
-    /** @var \Closure(Message): void */
-    private readonly \Closure $onResponse;
+    /** @var Closure(Message): void */
+    private Closure $onResponse;
 
-    /** @var \Closure(string): void */
-    private readonly \Closure $onDispatched;
+    /** @var Closure(string): void */
+    private Closure $onDispatched;
 
     /**
      * @param callable(Message): void $onResponse invoked with every response
@@ -42,17 +43,17 @@ final class Dispatcher
      *        worker_crashed error synthesized when a worker died mid-request
      */
     public function __construct(
-        private readonly RequestQueue $queue,
-        private readonly WorkerPool $pool,
-        private readonly EventLoop $loop,
+        private RequestQueue $queue,
+        private WorkerPool $pool,
+        private EventLoop $loop,
         callable $onResponse,
         // Invoked with a request's id the moment it reaches a worker - the
         // boundary between "waiting for capacity" and "being worked on",
         // which nothing else can observe from outside this class.
         ?callable $onDispatched = null,
     ) {
-        $this->onResponse = \Closure::fromCallable($onResponse);
-        $this->onDispatched = \Closure::fromCallable($onDispatched ?? static function (string $id): void {
+        $this->onResponse = Closure::fromCallable($onResponse);
+        $this->onDispatched = Closure::fromCallable($onDispatched ?? static function (string $id): void {
         });
     }
 
