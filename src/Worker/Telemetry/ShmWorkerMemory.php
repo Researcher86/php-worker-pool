@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Worker;
+namespace App\Worker\Telemetry;
 
 /**
  * WorkerMemory backed by what each worker publishes about itself (see

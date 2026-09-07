@@ -2,14 +2,17 @@
 
 declare(strict_types=1);
 
-namespace App\Worker;
+namespace App\Worker\Runtime;
 
 use App\IPC\ConnectionClosedException;
 use App\IPC\Socket;
 use App\Protocol\Message;
 use App\Protocol\MessageType;
+use App\Protocol\PayloadHydrationException;
+use App\Protocol\PayloadHydrator;
 use App\Protocol\Request;
 use App\Protocol\Response;
+use App\Worker\Telemetry\TelemetrySlot;
 use Closure;
 use Throwable;
 

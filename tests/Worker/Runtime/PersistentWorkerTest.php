@@ -2,7 +2,7 @@
 
 declare(ticks = 1);
 
-namespace App\Tests\Worker;
+namespace App\Tests\Worker\Runtime;
 
 use App\IPC\Socket;
 use App\IPC\SocketPair;
@@ -10,8 +10,8 @@ use App\Protocol\Message;
 use App\Protocol\MessageType;
 use App\Protocol\Request;
 use App\Protocol\Response;
-use App\Worker\PayloadHydrator;
-use App\Worker\WorkerRunner;
+use App\Protocol\PayloadHydrator;
+use App\Worker\Runtime\WorkerRunner;
 use PHPUnit\Framework\TestCase;
 
 final class PersistentWorkerTest extends TestCase

@@ -8,7 +8,7 @@ use App\Master\Master;
 use App\Protocol\Request;
 use App\Protocol\Response;
 use App\Sdk\WorkerPoolClient;
-use App\Worker\PayloadHydrator;
+use App\Protocol\PayloadHydrator;
 
 require __DIR__ . '/../vendor/autoload.php';
 

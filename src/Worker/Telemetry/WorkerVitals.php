@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Worker;
+namespace App\Worker\Telemetry;
 
 /**
  * One worker's self-reported reading, as published into shared memory by the

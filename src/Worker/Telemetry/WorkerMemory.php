@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Worker;
+namespace App\Worker\Telemetry;
 
 /**
  * How much memory a worker is using, as the Master sees it - which it cannot

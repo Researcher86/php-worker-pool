@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\Worker;
+namespace App\Tests\Worker\Telemetry;
 
-use App\Worker\SharedTelemetry;
-use App\Worker\TelemetrySlot;
+use App\Worker\Telemetry\SharedTelemetry;
+use App\Worker\Telemetry\TelemetrySlot;
 use PHPUnit\Framework\TestCase;
 
 final class SharedTelemetryTest extends TestCase

@@ -516,7 +516,7 @@ separate 30s of waiting for workers.
   ④⑦    src/Client/PendingRequestRegistry.php, PendingRequest.php
   ⑤⑦    src/Dispatcher/Dispatcher.php, src/Queue/RequestQueue.php
   ⑤⑦    src/Worker/WorkerPool.php, WorkerProcess.php, WorkerState.php
-  ⑥      src/Worker/WorkerRunner.php, PayloadHydrator.php
+  ⑥      src/Worker/Runtime/WorkerRunner.php, PayloadHydrator.php
          src/Protocol/Response.php
   ⑥      src/Contract/Calculate/        the application, not the runtime
   all    src/Master/Master.php          the wiring and the main loop

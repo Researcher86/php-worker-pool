@@ -7,6 +7,8 @@ namespace App\Worker;
 use App\IPC\SocketPair;
 use App\Protocol\Request;
 use App\Protocol\Response;
+use App\Worker\Runtime\WorkerRunner;
+use App\Worker\Telemetry\SharedTelemetry;
 use Closure;
 use RuntimeException;
 

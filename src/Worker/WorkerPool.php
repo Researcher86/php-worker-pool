@@ -10,6 +10,7 @@ use App\Support\Clock;
 use App\Support\Logger;
 use App\Support\NullLogger;
 use App\Support\SystemClock;
+use App\Worker\Telemetry\WorkerMemory;
 use InvalidArgumentException;
 use Throwable;
 

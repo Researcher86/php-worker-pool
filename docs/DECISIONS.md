@@ -25,6 +25,7 @@ how a request flows through it today, see
 - [Latency breakdown](#latency-breakdown)
 - [Worker telemetry over shared memory](#worker-telemetry-over-shared-memory)
 - [Readiness handshake](#readiness-handshake)
+- [Where Worker/ was split, and where it wasn't](#where-worker-was-split-and-where-it-wasnt)
 - [Socket permissions](#socket-permissions)
 - [Zombie processes after the test suite](#zombie-processes-after-the-test-suite)
 - [Where the code ended up, and why](#where-the-code-ended-up-and-why)
@@ -702,30 +703,34 @@ src/
 ├── Dispatcher/
 │   └── Dispatcher.php
 │
-├── Worker/
+├── Worker/                  # the MASTER's side: supervision
 │   ├── WorkerPool.php
 │   ├── WorkerProcess.php
-│   ├── WorkerRunner.php
 │   ├── WorkerState.php
 │   ├── WorkerCrash.php
 │   ├── WorkerLauncher.php
 │   ├── ForkedWorkerLauncher.php
 │   ├── Autoscaler.php
 │   ├── RecyclingPolicy.php
-│   ├── WorkerMemory.php        # what a worker's memory reading is
-│   ├── ShmWorkerMemory.php     #   ...as the worker itself reports it
-│   ├── SharedTelemetry.php     # the segment, its slots and their seqlock
-│   ├── TelemetrySlot.php       # one worker's write handle into it
-│   ├── WorkerVitals.php
-│   ├── PayloadHydrator.php
-│   └── PayloadHydrationException.php
+│   │
+│   ├── Runtime/             # the WORKER's side: runs in the forked child
+│   │   └── WorkerRunner.php
+│   │
+│   └── Telemetry/           # what a worker reports about itself
+│       ├── WorkerMemory.php     # what a worker's memory reading is
+│       ├── ShmWorkerMemory.php  #   ...as the worker itself reports it
+│       ├── SharedTelemetry.php  # the segment, its slots and their seqlock
+│       ├── TelemetrySlot.php    # one worker's write handle into it
+│       └── WorkerVitals.php
 │
 ├── Protocol/
 │   ├── Message.php
 │   ├── MessageType.php
 │   ├── MessageEncoder.php
 │   ├── MessageDecoder.php
-│   ├── Payload.php
+│   ├── Payload.php               # DTO -> payload
+│   ├── PayloadHydrator.php       # payload -> DTO
+│   ├── PayloadHydrationException.php
 │   ├── Request.php
 │   ├── Response.php
 │   └── MalformedMessageException.php
@@ -974,3 +979,50 @@ degraded. Interesting, but it needs a policy nobody has asked for yet.
 One extra message per worker per lifetime, not per request. The hot path is
 untouched: 16.2-17.1k req/s after, against 15.8-18.7k measured across
 earlier runs of the same benchmark - inside the run-to-run spread.
+
+---
+
+# Where Worker/ was split, and where it wasn't
+
+`src/Worker/` had grown to sixteen files holding three unrelated jobs, and
+the one boundary that matters most in this codebase - the fork - was
+invisible in the layout: `WorkerRunner` (which runs in the child, and cannot
+touch the Master's state) sat in the same directory as `WorkerPool` (which
+is the Master's state).
+
+Three moves, each for its own reason:
+
+**`PayloadHydrator` -> `Protocol/`.** It was never about workers. `bin/`
+uses it directly, `Protocol\Request` documents it, and it is one half of an
+operation whose other half was already in Protocol: `Payload::of()` packs a
+DTO into a payload, `PayloadHydrator::hydrate()` unpacks it back. The two
+halves now live together.
+
+**Telemetry -> `Worker/Telemetry/`.** A self-contained subsystem with its
+own transport (shared memory), its own wire format, and exactly one contract
+facing the rest of the pool - the `WorkerMemory` interface. It moves whole,
+tearing nothing.
+
+It was tempting to put `SharedTelemetry` in `IPC/` instead: a shm segment
+really is a second channel between Master and workers, the same category as
+`SocketPair`. It stayed out because it knows about worker pids, about
+reserving a slot before the fork, and about the shape of `WorkerVitals` -
+moving it would have dragged worker-domain knowledge into `IPC/`. Splitting
+it into a generic slot table plus a domain format on top would fix that and
+buy nothing at 387 lines.
+
+**`WorkerRunner` -> `Worker/Runtime/`.** The fork boundary, finally stated
+in the layout: everything under `Runtime/` executes in the child.
+
+What was deliberately NOT split: supervision itself. `WorkerPool` is 800
+lines and stays one class - see its docblock and the note above about why
+breaking it into a Recycler, a ReloadManager and a Scaler would recreate the
+races the single owner exists to prevent. Directories were the problem;
+`WorkerPool` was not.
+
+`IPC/` was reviewed in the same pass and left alone. `Socket` is used by all
+three channels (SDK to Master, Master to worker, client connections),
+`SocketPair` is the fork primitive, `ConnectionClosedException` is their
+failure - all of it inter-process transport, which is what the directory says.
+The only inaccuracy is the name `Socket` for what is really a framed message
+channel, and renaming it across five files buys a shade of meaning.

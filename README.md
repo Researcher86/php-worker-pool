@@ -194,14 +194,14 @@ them worth returning to.
 | backpressure works, and why the queue is bounded | [`Queue/RequestQueue.php`](src/Queue/RequestQueue.php) |
 | work is handed to a free worker, and what happens when one dies | [`Dispatcher/Dispatcher.php`](src/Dispatcher/Dispatcher.php) |
 | a worker's state machine is written down as one table | [`Worker/WorkerProcess.php`](src/Worker/WorkerProcess.php) |
-| a worker warms up before it is given any work | [`Worker/WorkerRunner.php`](src/Worker/WorkerRunner.php) |
+| a worker warms up before it is given any work | [`Worker/WorkerRunner.php`](src/Worker/Runtime/WorkerRunner.php) |
 | crashes, reload, recycling, scaling and shutdown share one owner | [`Worker/WorkerPool.php`](src/Worker/WorkerPool.php) |
 | a pool decides to grow or shrink | [`Worker/Autoscaler.php`](src/Worker/Autoscaler.php) |
 | a worker is replaced before it leaks, without dropping its request | [`Worker/RecyclingPolicy.php`](src/Worker/RecyclingPolicy.php) |
-| a worker reports what only it can measure about itself, lock-free | [`Worker/SharedTelemetry.php`](src/Worker/SharedTelemetry.php) |
+| a worker reports what only it can measure about itself, lock-free | [`Worker/SharedTelemetry.php`](src/Worker/Telemetry/SharedTelemetry.php) |
 | signals are handled without doing the work inside the handler | [`Master/Master.php`](src/Master/Master.php) |
 | the socket is kept from being world-connectable | [`Server/UnixSocketServer.php`](src/Server/UnixSocketServer.php) |
-| a worker loop stays alive through a handler that throws | [`Worker/WorkerRunner.php`](src/Worker/WorkerRunner.php) |
+| a worker loop stays alive through a handler that throws | [`Worker/WorkerRunner.php`](src/Worker/Runtime/WorkerRunner.php) |
 | a client keeps several requests in flight at once | [`Sdk/WorkerPoolClient.php`](src/Sdk/WorkerPoolClient.php) |
 
 Following a single request through all of them instead:

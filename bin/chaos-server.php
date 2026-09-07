@@ -7,7 +7,7 @@ use App\Contract\Calculate\CalculateRequest;
 use App\Master\Master;
 use App\Protocol\Request;
 use App\Protocol\Response;
-use App\Worker\PayloadHydrator;
+use App\Protocol\PayloadHydrator;
 use App\Worker\RecyclingPolicy;
 
 require __DIR__ . '/../vendor/autoload.php';

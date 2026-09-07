@@ -8,7 +8,7 @@ use App\Protocol\Message;
 use App\Protocol\MessageType;
 use App\Tests\Support\FakeClock;
 use App\Worker\RecyclingPolicy;
-use App\Worker\WorkerMemory;
+use App\Worker\Telemetry\WorkerMemory;
 use App\Worker\WorkerPool;
 use App\Worker\WorkerState;
 use InvalidArgumentException;
