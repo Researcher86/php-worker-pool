@@ -12,6 +12,7 @@ use App\Queue\RequestQueue;
 use App\Worker\Autoscaler;
 use App\Worker\WorkerPool;
 use App\Worker\WorkerState;
+use App\Tests\Support\AwaitsReadyWorkers;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -25,6 +26,8 @@ use PHPUnit\Framework\TestCase;
  */
 final class ReapRaceTest extends TestCase
 {
+    use AwaitsReadyWorkers;
+
     /**
      * getAvailable() said yes, the reaper removed the worker, and only then
      * did the dispatch happen. write() must refuse rather than resurrect a
@@ -33,6 +36,7 @@ final class ReapRaceTest extends TestCase
     public function testWriteRefusesAWorkerReapedSinceGetAvailable(): void
     {
         $pool = new WorkerPool(2);
+        $this->awaitReadyWorkers($pool);
 
         $chosen = $pool->getAvailable();
         $this->assertNotNull($chosen);

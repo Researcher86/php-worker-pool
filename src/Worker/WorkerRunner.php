@@ -45,6 +45,11 @@ final readonly class WorkerRunner
         // - null when the Master couldn't set up shared memory, or in tests
         // that don't care (see SharedTelemetry).
         private ?TelemetrySlot $slot = null,
+        // The application's warm-up, run once inside the worker before it
+        // announces itself: open the database connection, prime a cache,
+        // load whatever a first request should not have to pay for. Null
+        // means there is nothing to warm and READY goes out immediately.
+        private ?Closure $bootstrap = null,
     ) {
         // Default: echo the params back - a sane placeholder until an
         // application provides something real, and what the protocol-level
@@ -55,10 +60,25 @@ final readonly class WorkerRunner
 
     public function run(): void
     {
+        // Bootstrap first, and deliberately unguarded: a worker whose warm-up
+        // failed must not go on to announce itself as ready. Letting the
+        // throwable kill the process is exactly right - the Master reaps it
+        // like any crash and forks a replacement, instead of the pool filling
+        // up with workers that answer every request with handler_failed.
+        if ($this->bootstrap !== null) {
+            ($this->bootstrap)();
+        }
+
         // A baseline before any work: until a worker has published once, the
         // Master has no reading for it at all and its memory limit simply
-        // isn't enforced.
+        // isn't enforced. Taken after the bootstrap so the first reading
+        // describes a warmed-up worker rather than an empty one.
         $this->publishVitals();
+
+        // The handshake. Until this lands, the Master's WorkerProcess is
+        // STARTING and its transition table refuses to dispatch here - so
+        // this line is what puts the worker into rotation.
+        $this->socket->write(new Message(MessageType::READY, (string) posix_getpid()));
 
         while (true) {
             try {

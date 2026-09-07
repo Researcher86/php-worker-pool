@@ -67,6 +67,7 @@ idempotency, and that choice belongs to the application.
 |---|---|---|---|
 | **Worker crashes** | SIGCHLD, and independently by EOF on its socket | its in-flight request fails with `worker_crashed` | replacement forked immediately; pool back to size in well under a second |
 | **Worker hangs** | execution timeout (60s) | SIGTERM, then SIGKILL on the next sweep | replacement forked; slot recovered rather than lost forever |
+| **Worker never warms up** | bootstrap timeout (30s): forked, never reported READY | SIGTERM, then SIGKILL - the same path as a hang | replacement forked; without it the worker would sit in STARTING forever, costing capacity nothing would notice missing |
 | **Worker leaks / ages** | recycling limits | drained after its current request | replacement launched *before* it leaves, so capacity never dips |
 | **Client disconnects** | EOF on its socket | its pending requests are dropped at once, not left to time out | none needed; the worker's answer is discarded on arrival |
 | **Client sends garbage** | framing/JSON decode fails | that client is dropped | other clients unaffected |

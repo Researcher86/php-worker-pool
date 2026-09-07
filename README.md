@@ -165,6 +165,7 @@ three sharp edges, and the file is mostly those:
 | **Backpressure** | a bounded queue that rejects instead of growing until OOM |
 | **Timeouts** | two of them: a request deadline that answers the client, and an execution limit that kills a handler which will never return |
 | **Crash recovery** | SIGCHLD, the dead worker's request failed, a replacement forked |
+| **Readiness handshake** | a forked worker warms up first and reports READY; nothing is dispatched to it until it does |
 | **Worker recycling** | replaced after N requests / an age / a memory ceiling - drained, never killed mid-request |
 | **Worker telemetry** | each worker publishes its own memory use into shared memory - a pull-only side channel, no messages, no fd |
 | **Graceful shutdown** | SIGTERM drains in-flight work within one budget, then force-stops |
@@ -193,6 +194,7 @@ them worth returning to.
 | backpressure works, and why the queue is bounded | [`Queue/RequestQueue.php`](src/Queue/RequestQueue.php) |
 | work is handed to a free worker, and what happens when one dies | [`Dispatcher/Dispatcher.php`](src/Dispatcher/Dispatcher.php) |
 | a worker's state machine is written down as one table | [`Worker/WorkerProcess.php`](src/Worker/WorkerProcess.php) |
+| a worker warms up before it is given any work | [`Worker/WorkerRunner.php`](src/Worker/WorkerRunner.php) |
 | crashes, reload, recycling, scaling and shutdown share one owner | [`Worker/WorkerPool.php`](src/Worker/WorkerPool.php) |
 | a pool decides to grow or shrink | [`Worker/Autoscaler.php`](src/Worker/Autoscaler.php) |
 | a worker is replaced before it leaks, without dropping its request | [`Worker/RecyclingPolicy.php`](src/Worker/RecyclingPolicy.php) |
@@ -592,11 +594,17 @@ SplQueue
 
 # Worker Lifecycle
 
-Each Worker has a state. A forked worker is IDLE right away: its socket is
-created before the fork, so the Master can dispatch to it immediately -
-there is no readiness handshake to wait for.
+Each Worker has a state. A forked worker starts STARTING and becomes
+dispatchable only when it says so: the application's own warm-up - a
+database connection, a primed cache - runs inside the worker, and the Master
+cannot see when that finished. Only the worker can, so it sends one READY
+message.
 
 ```text
+STARTING
+    │
+    │  READY  ── the worker's warm-up is done
+    ▼
    IDLE ◀─────────┐
     │             │
     ▼             │
@@ -616,12 +624,18 @@ STOPPING
 Possible states:
 
 ```text
+STARTING
 IDLE
 BUSY
 DRAINING
 STOPPING
 DEAD
 ```
+
+A worker that never reports ready is terminated and replaced
+(`workerBootstrapTimeoutSeconds`, 30s by default) - a warm-up that hangs on
+an unreachable database would otherwise cost one worker of capacity
+permanently, and silently.
 
 `DRAINING` is what makes graceful reload, scale-down and worker recycling
 one mechanism instead of three: the worker takes no new request, but the one

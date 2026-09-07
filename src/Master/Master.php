@@ -123,6 +123,17 @@ final class Master
         // configured (bin/server.php), never inside the runtime. Null falls
         // back to WorkerRunner's echo default.
         private readonly ?Closure $handler = null,
+        // Run once inside each worker before it reports READY: the
+        // application's warm-up (database connection, primed cache). Until it
+        // returns, that worker is STARTING and nothing is dispatched to it -
+        // so a first request never pays for a cold process.
+        private readonly ?Closure $bootstrap = null,
+        // How long a worker may take to report READY before it is treated as
+        // broken and replaced. Without a ceiling, a bootstrap that hangs
+        // (an unreachable database, say) would cost one worker of capacity
+        // permanently, and silently - nothing else in the system would ever
+        // ask why that worker never did anything.
+        private readonly float $workerBootstrapTimeoutSeconds = 30.0,
     ) {
     }
 
@@ -138,7 +149,7 @@ final class Master
         try {
             $this->pool = new WorkerPool(
                 $this->minWorkers,
-                new ForkedWorkerLauncher($this->handler, $telemetry),
+                new ForkedWorkerLauncher($this->handler, $telemetry, $this->bootstrap),
                 maxWorkers: $this->maxWorkers,
                 logger: $this->logger,
                 recycling: $this->recycling,
@@ -195,17 +206,22 @@ final class Master
             while ($this->running) {
                 $this->loop->tick(self::TIMEOUT_CHECK_INTERVAL_SECONDS);
 
-                // Capacity can appear outside any dispatch event (a crash
-                // replacement reaped in during this tick, a scale-up, a
-                // reload's fresh generation) - give queued requests a chance
-                // to land on it.
-                $this->dispatcher->dispatchQueued();
-
                 $this->sendTimeouts();
-                $this->pool->terminateStuckWorkers($this->workerExecutionTimeoutSeconds);
+                $this->pool->terminateStuckWorkers(
+                    $this->workerExecutionTimeoutSeconds,
+                    $this->workerBootstrapTimeoutSeconds,
+                );
                 $this->pool->recycleExhaustedWorkers();
                 $this->pool->retireIdleWorkers();
                 $autoscaler->check();
+
+                // Last in the tick, on purpose: the sweeps above are what
+                // fork new workers (a replacement, a scale-up, a reload's
+                // fresh generation), and this is what starts watching their
+                // sockets for the READY they are about to send. Running it
+                // first would leave a worker forked in this tick unwatched
+                // until the next one.
+                $this->dispatcher->dispatchQueued();
             }
 
             $remaining = $this->shutdown($server);

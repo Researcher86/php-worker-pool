@@ -31,6 +31,35 @@ final class EventLoop
     /** @var array<int, callable(): void> */
     private array $writeHandlers = [];
 
+    /**
+     * Drops resources that were closed by whoever owns them, before
+     * stream_select() is handed one and raises a TypeError that takes the
+     * whole process down.
+     *
+     * The loop does not own what it watches, and an owner may close at a
+     * moment the loop cannot observe: WorkerPool closes a retiring worker's
+     * socket while the worker stays in the pool until SIGCHLD reaps it, a
+     * client connection is dropped from inside a handler, a shutdown closes
+     * everything at once. Requiring every one of them to deregister first -
+     * in the right order, on every path, including the ones that throw - is
+     * a coupling the loop can simply not need: a closed resource is never
+     * going to be ready again, so forgetting it is always right.
+     */
+    private function forgetClosedResources(): void
+    {
+        foreach ($this->readResources as $id => $resource) {
+            if (!is_resource($resource)) {
+                unset($this->readResources[$id], $this->readHandlers[$id]);
+            }
+        }
+
+        foreach ($this->writeResources as $id => $resource) {
+            if (!is_resource($resource)) {
+                unset($this->writeResources[$id], $this->writeHandlers[$id]);
+            }
+        }
+    }
+
     /** @param resource $resource */
     public function addReadable(mixed $resource, callable $onReadable): void
     {
@@ -97,6 +126,8 @@ final class EventLoop
      */
     public function tick(?float $timeoutSeconds = null): void
     {
+        $this->forgetClosedResources();
+
         if ($this->readResources === [] && $this->writeResources === []) {
             return;
         }

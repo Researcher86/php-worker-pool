@@ -4,6 +4,7 @@ declare(ticks = 1);
 
 namespace App\Tests\Worker;
 
+use App\IPC\Socket;
 use App\IPC\SocketPair;
 use App\Protocol\Message;
 use App\Protocol\MessageType;
@@ -15,6 +16,18 @@ use PHPUnit\Framework\TestCase;
 
 final class PersistentWorkerTest extends TestCase
 {
+
+    /**
+     * A real worker announces itself before it will serve anything, so that
+     * message is the first thing on the wire - consumed here so each test
+     * can go on asserting about the answers it actually cares about.
+     */
+    private function consumeReadyHandshake(Socket $master): void
+    {
+        $first = $master->read()[0];
+
+        $this->assertSame(MessageType::READY, $first->type, 'a worker must report ready before serving');
+    }
     public function testWorkerProcessesMultipleConsecutiveRequests(): void
     {
         $pair = new SocketPair();
@@ -33,6 +46,7 @@ final class PersistentWorkerTest extends TestCase
 
         $pair->closeWorker();
         $master = $pair->getMasterSocket();
+        $this->consumeReadyHandshake($master);
 
         $requests = 100;
 
@@ -89,6 +103,7 @@ final class PersistentWorkerTest extends TestCase
 
         $pair->closeWorker();
         $master = $pair->getMasterSocket();
+        $this->consumeReadyHandshake($master);
 
         // Non-numeric operands make calculate's `a + b` throw a TypeError.
         $master->write(new Message(MessageType::REQUEST, 'bad-1', [
@@ -149,6 +164,7 @@ final class PersistentWorkerTest extends TestCase
 
         $pair->closeWorker();
         $master = $pair->getMasterSocket();
+        $this->consumeReadyHandshake($master);
 
         // params hydrate into SumRequest(a: 10, b: 20) - 'extra' is ignored.
         $master->write(new Message(MessageType::REQUEST, 'sum-1', [
@@ -213,6 +229,7 @@ final class PersistentWorkerTest extends TestCase
 
         $pair->closeWorker();
         $master = $pair->getMasterSocket();
+        $this->consumeReadyHandshake($master);
 
         $master->write(new Message(MessageType::REQUEST, 'act-1', ['action' => 'nope']));
 

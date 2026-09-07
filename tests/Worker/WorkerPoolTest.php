@@ -13,14 +13,18 @@ use App\Queue\RequestQueue;
 use App\Worker\ForkedWorkerLauncher;
 use App\Worker\WorkerPool;
 use App\Worker\WorkerState;
+use App\Tests\Support\AwaitsReadyWorkers;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 
 final class WorkerPoolTest extends TestCase
 {
+    use AwaitsReadyWorkers;
+
     public function testStartsRequestedNumberOfWorkers(): void
     {
         $pool = new WorkerPool(4);
+        $this->awaitReadyWorkers($pool);
 
         $this->assertSame(4, $pool->count());
 
@@ -67,6 +71,7 @@ final class WorkerPoolTest extends TestCase
     public function testMultipleWorkersProcessRequestsInParallel(): void
     {
         $pool = new WorkerPool(4);
+        $this->awaitReadyWorkers($pool);
         $loop = new EventLoop();
         $responses = [];
 
@@ -96,6 +101,7 @@ final class WorkerPoolTest extends TestCase
     public function testGetAvailableReturnsIdleWorkerThenChangesWhenBusy(): void
     {
         $pool = new WorkerPool(1);
+        $this->awaitReadyWorkers($pool);
         $loop = new EventLoop();
         $responses = [];
 
@@ -130,6 +136,7 @@ final class WorkerPoolTest extends TestCase
     public function testReapDeadWorkersRemovesAndReplacesACrashedWorker(): void
     {
         $pool = new WorkerPool(2);
+        $this->awaitReadyWorkers($pool);
         $deadWorkerId = $pool->getAvailable();
         $this->assertNotNull($deadWorkerId);
 
@@ -198,6 +205,7 @@ final class WorkerPoolTest extends TestCase
     public function testTotalCrashedAccumulatesAcrossReapCalls(): void
     {
         $pool = new WorkerPool(2);
+        $this->awaitReadyWorkers($pool);
         $this->assertSame(0, $pool->totalCrashed());
 
         $firstVictim = $pool->getAvailable();
@@ -427,6 +435,7 @@ final class WorkerPoolTest extends TestCase
         // fail, call 5 succeeds.
         $launcher = new FlakyWorkerLauncher(new ForkedWorkerLauncher(), failOnCall: 4);
         $pool = new WorkerPool(3, $launcher);
+        $this->awaitReadyWorkers($pool);
 
         // write() marks a worker BUSY (excluded from getAvailable()), so
         // three calls in a row give three distinct pids.

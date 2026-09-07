@@ -77,13 +77,18 @@ final class ShmWorkerMemoryTest extends TestCase
 
             $worker->write(new Message(MessageType::REQUEST, 'req-1', ['ping' => 'pong']));
 
-            $responses = [];
+            $answer = null;
 
-            while ($responses === []) {
-                $responses = $worker->readAvailable();
+            // The READY handshake is on this socket too, ahead of the answer.
+            while ($answer === null) {
+                foreach ($worker->readAvailable() as $message) {
+                    if ($message->type !== MessageType::READY) {
+                        $answer = $message;
+                    }
+                }
             }
 
-            $this->assertSame('req-1', $responses[0]->id);
+            $this->assertSame('req-1', $answer->id);
             // Whatever the number moved to, it is still a real reading from
             // that process - the point being that it keeps arriving without
             // anything being asked of the worker over the socket.

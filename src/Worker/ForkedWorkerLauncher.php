@@ -29,6 +29,10 @@ final readonly class ForkedWorkerLauncher implements WorkerLauncher
         // exactly as before, with the Master measuring workers from outside
         // (see SharedTelemetry, ShmWorkerMemory).
         private ?SharedTelemetry $telemetry = null,
+        // The application's per-worker warm-up, run in the child before it
+        // reports READY (see WorkerRunner). Like $handler, it reaches every
+        // worker through fork() - including replacements forked hours later.
+        private ?Closure $bootstrap = null,
     ) {
     }
 
@@ -86,7 +90,7 @@ final readonly class ForkedWorkerLauncher implements WorkerLauncher
 
             $socketPair->closeMaster();
 
-            $runner = new WorkerRunner($socketPair->getWorkerSocket(), $this->handler, $slot);
+            $runner = new WorkerRunner($socketPair->getWorkerSocket(), $this->handler, $slot, $this->bootstrap);
             $runner->run();
 
             exit(0);

@@ -12,24 +12,30 @@ use LogicException;
  * Master-side handle for one worker process: its pid, its socket, its
  * lifecycle state, and the counters recycling decides on.
  *
- * State machine (see WorkerState). A worker is IDLE from the moment it is
- * forked: its socket is created before the fork, so it can be dispatched to
- * straight away - there is no readiness handshake to wait for.
+ * State machine (see WorkerState). A worker starts STARTING and becomes
+ * dispatchable only when it says so - the readiness handshake. A fork does
+ * not mean a usable worker: the application's own bootstrap (database
+ * connection, warm cache) runs first, and the Master cannot see when that
+ * finished. Only the worker can, so only the worker says it, with one READY
+ * message.
  *
- *   IDLE ──beginRequest()──> BUSY ──finishRequest()──> IDLE
- *     │                       │
- *     │       drain()         │         drain()
- *     └───────────┬───────────┴────────────┐
- *                 ▼                        ▼
- *             DRAINING ◀─finishRequest()─DRAINING
- *             (no work)                 (still working)
- *                 │
- *                 │  stop()          (also legal from any state but DEAD,
- *                 ▼                   so shutdown is never blocked)
- *             STOPPING
- *                 │
- *                 ▼
+ *   STARTING ──markReady()──> IDLE ──beginRequest()──> BUSY
+ *     │                         │                       │
+ *     │                         │       drain()         │      drain()
+ *     │        drain()          └───────────┬───────────┴──────────┐
+ *     └────────────────────────────────────►▼                      ▼
+ *                                       DRAINING ◀─finishRequest()─DRAINING
+ *                                       (no work)                (still working)
+ *                                           │
+ *                                           │  stop()   (legal from any state
+ *                                           ▼            but DEAD, so shutdown
+ *                                       STOPPING         is never blocked)
+ *                                           │
+ *                                           ▼
  *   any state ──markDead()──> DEAD (terminal, no way out)
+ *
+ * BUSY ──finishRequest()──> IDLE, never back to STARTING: readiness is a
+ * one-time fact about a process, not something it re-earns per request.
  *
  * Two things are tracked separately on purpose: the STATE says whether new
  * work may be dispatched here, and $currentRequestId says whether work is
@@ -52,15 +58,22 @@ final class WorkerProcess
      * for - the alternative is an `if ($state === ...)` in fifteen methods,
      * which is how state machines rot.
      *
-     *   FROM        dispatch    respond     drain       stop        die
-     *   ─────────────────────────────────────────────────────────────────
-     *   IDLE        BUSY        -           DRAINING    STOPPING    DEAD
-     *   BUSY        -           IDLE        DRAINING    STOPPING    DEAD
-     *   DRAINING    -           DRAINING    DRAINING    STOPPING    DEAD
-     *   STOPPING    -           -           STOPPING    STOPPING    DEAD
-     *   DEAD        -           DEAD        DEAD        -           DEAD
+     *   FROM        ready       dispatch    respond     drain       stop        die
+     *   ─────────────────────────────────────────────────────────────────────────
+     *   STARTING    IDLE        -           -           DRAINING    STOPPING    DEAD
+     *   IDLE        -           BUSY        -           DRAINING    STOPPING    DEAD
+     *   BUSY        -           -           IDLE        DRAINING    STOPPING    DEAD
+     *   DRAINING    DRAINING    -           DRAINING    DRAINING    STOPPING    DEAD
+     *   STOPPING    -           -           -           STOPPING    STOPPING    DEAD
+     *   DEAD        DEAD        -           DEAD        DEAD        -           DEAD
      *
-     * Three entries look odd and are deliberate:
+     * Five entries look odd and are deliberate:
+     *  - STARTING has no dispatch: that IS the feature. A worker that hasn't
+     *    finished its bootstrap cannot be given work, and the table is what
+     *    guarantees it rather than a check someone has to remember.
+     *  - DRAINING + ready stays DRAINING, and DEAD + ready stays DEAD: a
+     *    reload or a crash can overtake a READY already on the wire, and
+     *    the late handshake must not revive a worker that is leaving.
      *  - DRAINING + respond stays DRAINING, so a worker that just answered
      *    its last request cannot be handed another before it retires.
      *  - STOPPING/DEAD + drain is a no-op rather than an error: draining
@@ -71,6 +84,11 @@ final class WorkerProcess
      * @var array<string, array<string, WorkerState>>
      */
     private const array TRANSITIONS = [
+        'ready' => [
+            'STARTING' => WorkerState::IDLE,
+            'DRAINING' => WorkerState::DRAINING,
+            'DEAD' => WorkerState::DEAD,
+        ],
         'dispatch' => [
             'IDLE' => WorkerState::BUSY,
         ],
@@ -80,6 +98,7 @@ final class WorkerProcess
             'DEAD' => WorkerState::DEAD,
         ],
         'drain' => [
+            'STARTING' => WorkerState::DRAINING,
             'IDLE' => WorkerState::DRAINING,
             'BUSY' => WorkerState::DRAINING,
             'DRAINING' => WorkerState::DRAINING,
@@ -87,12 +106,14 @@ final class WorkerProcess
             'DEAD' => WorkerState::DEAD,
         ],
         'stop' => [
+            'STARTING' => WorkerState::STOPPING,
             'IDLE' => WorkerState::STOPPING,
             'BUSY' => WorkerState::STOPPING,
             'DRAINING' => WorkerState::STOPPING,
             'STOPPING' => WorkerState::STOPPING,
         ],
         'die' => [
+            'STARTING' => WorkerState::DEAD,
             'IDLE' => WorkerState::DEAD,
             'BUSY' => WorkerState::DEAD,
             'DRAINING' => WorkerState::DEAD,
@@ -113,7 +134,10 @@ final class WorkerProcess
     public function __construct(
         private readonly int $pid,
         private readonly Socket $socket,
-        private WorkerState $state = WorkerState::IDLE,
+        // STARTING, because that is what a freshly forked worker is. A test
+        // double with no process behind it (see FakeWorkerLauncher) passes
+        // IDLE instead: nothing is ever going to send its READY.
+        private WorkerState $state = WorkerState::STARTING,
         private ?string $currentRequestId = null,
     ) {
     }
@@ -169,6 +193,24 @@ final class WorkerProcess
     public function isAvailable(): bool
     {
         return $this->state === WorkerState::IDLE;
+    }
+
+    /**
+     * The worker has finished its bootstrap and may be dispatched to.
+     *
+     * Called on the READY message and nowhere else: the Master has no way of
+     * knowing when an application's warm-up finished, which is the whole
+     * reason this state exists.
+     */
+    public function markReady(): void
+    {
+        $this->apply('ready');
+    }
+
+    /** Forked but not yet dispatchable - see markReady(). */
+    public function isStarting(): bool
+    {
+        return $this->state === WorkerState::STARTING;
     }
 
     /** Whether the worker is working on a request right now, whatever its state. */

@@ -24,6 +24,7 @@ how a request flows through it today, see
 - [Failure semantics and invariant tests](#failure-semantics-and-invariant-tests)
 - [Latency breakdown](#latency-breakdown)
 - [Worker telemetry over shared memory](#worker-telemetry-over-shared-memory)
+- [Readiness handshake](#readiness-handshake)
 - [Socket permissions](#socket-permissions)
 - [Zombie processes after the test suite](#zombie-processes-after-the-test-suite)
 - [Where the code ended up, and why](#where-the-code-ended-up-and-why)
@@ -879,3 +880,97 @@ Three small writes per request on the worker's hot path. Benchmarked at
 telemetry against 15.8-18.0k without - the difference is smaller than the
 spread between runs, so the honest statement is that it isn't measurable
 here, not that it is free.
+
+---
+
+# Readiness handshake
+
+Came out of a suggestion to move the pool from push to pull scheduling -
+workers asking for work instead of the Master choosing a worker. Most of
+that idea was already in the code: `Dispatcher` registers a worker's socket
+and calls `pump()` the moment an answer arrives, so a worker's RESPONSE is
+already its "I am free" signal, arriving as an event. A separate READY
+message per request would have added one message and one round trip and
+changed nothing about the scheduling.
+
+But one case in it was real, and it is the one where readiness does NOT
+coincide with finishing a request: **a fork is not a usable worker**. The
+application's warm-up - connecting to a database, priming a cache - runs
+inside the child, and the Master cannot see when it finished. Only the
+worker can. So the worker says it, once, with a READY message, and until
+then it sits in STARTING and the transition table refuses to dispatch there.
+
+This is exactly the condition the removal of STARTING named as its own
+undoing: "If a readiness handshake ever lands - a worker confirming its
+bootstrap before work is sent to it - the state comes back with the opposite
+meaning." It did, and it does.
+
+## Why the bootstrap hook is where it is
+
+`ForkedWorkerLauncher` runs it in the child, after `pcntl_fork()`, before
+READY. That placement is the point, not an implementation detail: a database
+connection opened in the Master and inherited through fork() would be ONE
+socket shared by every worker, each writing into the others' protocol
+stream. Opened in the hook, each worker gets its own - and so does every
+replacement forked hours later, since the closure travels through fork()
+like `$handler` does.
+
+The corollary for callers: the hook must CREATE its resources, not capture
+them. A closure written as `use ($pdo)` over a connection the Master already
+opened puts the shared-socket problem straight back.
+
+## What it cost elsewhere
+
+**Watching sockets for a worker's whole life.** Registration used to last
+only while a worker was BUSY, which worked while the only thing a worker
+ever sent was an answer to something. READY arrives when the worker is NOT
+busy and nothing was sent to it, so nobody would have been listening.
+`Dispatcher` now watches every worker from the moment it appears, and
+reconciles that set against the pool on each `pump()` - pulled rather than
+pushed, because workers appear in several places (a crash replacement forked
+inside a SIGCHLD handler, a scale-up, a reload wave) and one loop beats five
+notification call sites.
+
+That reconciliation has an ordering that looks arbitrary and is not:
+departures are deregistered BEFORE arrivals are registered. EventLoop keys
+its maps by `(int) $resource`, and PHP hands a closed stream's id straight
+back to the next stream opened - so a crash replacement can carry the very
+id its predecessor just released. Registering first would have deleted the
+handler just installed, and that worker's READY would have arrived at a
+socket nobody was listening to: one worker short, silently, forever.
+
+**EventLoop had to stop trusting its own registry.** With sockets watched
+for a worker's whole life, the loop started being handed resources their
+owner had closed - `retireIdleWorkers()` closes a retiring worker's socket
+while the worker stays in the pool until SIGCHLD reaps it. `stream_select()`
+answers that with a TypeError, which took the whole Master down (found by
+running the chaos suite, not by reasoning). `tick()` now drops closed
+resources before selecting. The alternative - every owner deregistering
+first, on every path including the ones that throw - is coupling the loop
+does not need: a closed resource is never going to be ready again, so
+forgetting it is always right.
+
+**A second way to be stuck.** `terminateStuckWorkers()` gained a bootstrap
+limit alongside the execution limit, rather than a sweep of its own: both
+mean "this worker will not become useful on its own", and both end
+identically (SIGTERM, SIGKILL next pass, reaped and replaced). What is stuck
+differs - an execution overrun is a REQUEST that will never finish, a
+bootstrap overrun is the WORKER - so the sweep tells them apart in one
+place, `stuckReason()`, and the log line says which happened.
+
+## What was NOT taken from the pull idea
+
+**Prefetch** - a worker holding the next request while it answers the
+current one. It buys a round trip on the hot path and costs the invariant
+`InvariantsTest` asserts (one request per worker at a time), makes a crash
+lose two requests instead of one, and changes what the execution timeout
+measures. Not worth it without a benchmark showing the round trip matters.
+
+**Worker-side backpressure** - a worker saying "not now" because it is
+degraded. Interesting, but it needs a policy nobody has asked for yet.
+
+## Cost
+
+One extra message per worker per lifetime, not per request. The hot path is
+untouched: 16.2-17.1k req/s after, against 15.8-18.7k measured across
+earlier runs of the same benchmark - inside the run-to-run spread.
