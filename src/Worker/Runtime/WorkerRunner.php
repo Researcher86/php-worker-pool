@@ -2,14 +2,21 @@
 
 declare(strict_types=1);
 
-namespace App\Worker;
+namespace App\Worker\Runtime;
 
 use App\IPC\ConnectionClosedException;
 use App\IPC\Socket;
 use App\Protocol\Message;
 use App\Protocol\MessageType;
+use App\Protocol\PayloadHydrationException;
+use App\Protocol\PayloadHydrator;
 use App\Protocol\Request;
 use App\Protocol\Response;
+use App\Support\Logger;
+use App\Support\NullLogger;
+use App\Worker\Telemetry\TelemetrySlot;
+use Closure;
+use Throwable;
 
 /**
  * The loop a worker process runs for its whole life: read a request, hand it
@@ -32,13 +39,29 @@ use App\Protocol\Response;
  */
 final readonly class WorkerRunner
 {
-    /** @var \Closure(Request): Response */
-    private \Closure $handler;
+    /** @var Closure(Request): Response */
+    private Closure $handler;
 
-    /** @param \Closure(Request): Response|null $handler */
+    /** @param Closure(Request): Response|null $handler */
     public function __construct(
         private Socket $socket,
-        ?\Closure $handler = null,
+        ?Closure $handler = null,
+        // Where this worker publishes what only it can measure about itself
+        // - null when the Master couldn't set up shared memory, or in tests
+        // that don't care (see SharedTelemetry).
+        private ?TelemetrySlot $slot = null,
+        /** @var (Closure(Logger): void)|null */
+        // The application's warm-up, run once inside the worker before it
+        // announces itself: open the database connection, prime a cache,
+        // load whatever a first request should not have to pay for. Null
+        // means there is nothing to warm and READY goes out immediately.
+        //
+        // It receives the Master's own Logger, inherited through fork(), so
+        // a warm-up reports through the same channel as everything else the
+        // runtime says - one format, one destination, and swappable in a
+        // test - instead of each application reaching for fwrite(STDERR).
+        private ?Closure $bootstrap = null,
+        private Logger $logger = new NullLogger(),
     ) {
         // Default: echo the params back - a sane placeholder until an
         // application provides something real, and what the protocol-level
@@ -49,6 +72,26 @@ final readonly class WorkerRunner
 
     public function run(): void
     {
+        // Bootstrap first, and deliberately unguarded: a worker whose warm-up
+        // failed must not go on to announce itself as ready. Letting the
+        // throwable kill the process is exactly right - the Master reaps it
+        // like any crash and forks a replacement, instead of the pool filling
+        // up with workers that answer every request with handler_failed.
+        if ($this->bootstrap !== null) {
+            ($this->bootstrap)($this->logger);
+        }
+
+        // A baseline before any work: until a worker has published once, the
+        // Master has no reading for it at all and its memory limit simply
+        // isn't enforced. Taken after the bootstrap so the first reading
+        // describes a warmed-up worker rather than an empty one.
+        $this->publishVitals();
+
+        // The handshake. Until this lands, the Master's WorkerProcess is
+        // STARTING and its transition table refuses to dispatch here - so
+        // this line is what puts the worker into rotation.
+        $this->socket->write(new Message(MessageType::READY, (string) posix_getpid()));
+
         while (true) {
             try {
                 $messages = $this->socket->read();
@@ -68,6 +111,11 @@ final readonly class WorkerRunner
                 }
 
                 $this->socket->write($this->handle($message));
+
+                // After the reply, not before: the response is out the door
+                // first, and the reading the Master gets is the one that
+                // matters for recycling - what this request LEFT allocated.
+                $this->publishVitals();
             }
         }
     }
@@ -90,7 +138,7 @@ final readonly class WorkerRunner
             // reported distinctly from a handler bug so the caller knows
             // which side to fix.
             return $this->toMessage($request->id, Response::error('invalid_payload'));
-        } catch (\Throwable) {
+        } catch (Throwable) {
             // A handler bug must not kill the worker: crashing here would
             // cost the Master a reap-and-refork and turn one bad request
             // into a worker_crashed for its client, when an error reply
@@ -113,6 +161,22 @@ final readonly class WorkerRunner
             $requestId,
             $response->payload,
         );
+    }
+
+    /**
+     * memory_get_usage(true) is the whole reason this exists: it reports what
+     * PHP has actually taken from the OS in THIS process, which no one
+     * outside it can ask for, and which is the quantity a memory recycling
+     * limit is about (see ShmWorkerMemory).
+     *
+     * microtime() rather than the Master's Clock abstraction on purpose -
+     * the timestamp is read by a different process, so it has to come from
+     * the one clock both of them genuinely share, not from something a test
+     * could have replaced on one side only.
+     */
+    private function publishVitals(): void
+    {
+        $this->slot?->publish(memory_get_usage(true), microtime(true));
     }
 
     public function close(): void

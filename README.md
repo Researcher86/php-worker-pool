@@ -97,6 +97,29 @@ $handler = static function (Request $request): Response {
 (new Master(handler: $handler))->run();
 ```
 
+Anything a worker must do once before it can serve - open a database
+connection, prime a cache - goes in `bootstrap`, which runs inside each
+forked worker before it reports READY. Nothing is dispatched to a worker
+that hasn't reported, so no request waits on a cold process:
+
+```php
+$bootstrap = static function (Logger $logger): void {
+    Database::connect(...);   // CREATE it here - see below
+
+    $logger->log('worker ' . posix_getpid() . ': warmed up');
+};
+
+(new Master(handler: $handler, bootstrap: $bootstrap))->run();
+```
+
+It is handed the Master's own `Logger`, inherited through `fork()`, so a
+warm-up reports through the same channel and format as the runtime itself.
+
+It has to *create* its resources rather than capture them: a connection
+opened before the pool is built would be one socket inherited by every
+worker, each writing into the others' protocol stream. `bin/server.php` has
+a runnable stub of this.
+
 The client is a plain PHP object - usable from PHP-FPM, CLI, cron, or a
 queue consumer:
 
@@ -110,6 +133,10 @@ $result = $client->call(new Request('calculate', new CalculateRequest(a: 10, b: 
 $a = $client->send(new Request('calculate', new CalculateRequest(a: 1, b: 2)));
 $b = $client->send(new Request('calculate', new CalculateRequest(a: 3, b: 4)));
 [$first, $second] = $client->all($a, $b);
+
+// fan-in on a budget: take what answered within 2s total, skip the rest
+$answers = $client->allWithin(2.0, $a, $b);
+$page['orders'] = $answers[0] ?? null;   // present = answered, missing = didn't
 ```
 
 Requests are typed at both ends: the payload is hydrated into the DTO the
@@ -157,10 +184,13 @@ three sharp edges, and the file is mostly those:
 | **Message framing** | length-prefixed frames over a byte stream: partial reads, partial writes, multiple messages per read |
 | **Correlation ids** | responses come back in any order and still reach the right caller |
 | **Multiplexing** | many requests in flight per connection, client side included |
+| **Fan-in on a budget** | `allWithin()` collects what answered inside one total deadline and leaves out the rest, instead of failing the whole group |
 | **Backpressure** | a bounded queue that rejects instead of growing until OOM |
 | **Timeouts** | two of them: a request deadline that answers the client, and an execution limit that kills a handler which will never return |
 | **Crash recovery** | SIGCHLD, the dead worker's request failed, a replacement forked |
+| **Readiness handshake** | a forked worker warms up first and reports READY; nothing is dispatched to it until it does |
 | **Worker recycling** | replaced after N requests / an age / a memory ceiling - drained, never killed mid-request |
+| **Worker telemetry** | each worker publishes its own memory use into shared memory - a pull-only side channel, no messages, no fd |
 | **Graceful shutdown** | SIGTERM drains in-flight work within one budget, then force-stops |
 | **Graceful reload** | SIGHUP swaps the whole generation without dropping a connection |
 | **Autoscaling** | grows on queue pressure, shrinks when idle |
@@ -187,12 +217,14 @@ them worth returning to.
 | backpressure works, and why the queue is bounded | [`Queue/RequestQueue.php`](src/Queue/RequestQueue.php) |
 | work is handed to a free worker, and what happens when one dies | [`Dispatcher/Dispatcher.php`](src/Dispatcher/Dispatcher.php) |
 | a worker's state machine is written down as one table | [`Worker/WorkerProcess.php`](src/Worker/WorkerProcess.php) |
+| a worker warms up before it is given any work | [`Worker/WorkerRunner.php`](src/Worker/Runtime/WorkerRunner.php) |
 | crashes, reload, recycling, scaling and shutdown share one owner | [`Worker/WorkerPool.php`](src/Worker/WorkerPool.php) |
 | a pool decides to grow or shrink | [`Worker/Autoscaler.php`](src/Worker/Autoscaler.php) |
 | a worker is replaced before it leaks, without dropping its request | [`Worker/RecyclingPolicy.php`](src/Worker/RecyclingPolicy.php) |
+| a worker reports what only it can measure about itself, lock-free | [`Worker/SharedTelemetry.php`](src/Worker/Telemetry/SharedTelemetry.php) |
 | signals are handled without doing the work inside the handler | [`Master/Master.php`](src/Master/Master.php) |
 | the socket is kept from being world-connectable | [`Server/UnixSocketServer.php`](src/Server/UnixSocketServer.php) |
-| a worker loop stays alive through a handler that throws | [`Worker/WorkerRunner.php`](src/Worker/WorkerRunner.php) |
+| a worker loop stays alive through a handler that throws | [`Worker/WorkerRunner.php`](src/Worker/Runtime/WorkerRunner.php) |
 | a client keeps several requests in flight at once | [`Sdk/WorkerPoolClient.php`](src/Sdk/WorkerPoolClient.php) |
 
 Following a single request through all of them instead:
@@ -480,6 +512,26 @@ Socket Pair
 Master Socket ◄──────────────► Worker Socket
 ```
 
+Requests and responses are events: somebody is waiting for each one, so they
+travel over a socket the event loop can wait on. But not everything a
+process wants to know about another one is an event. A worker's memory use
+is *state* - nobody is waiting for it, a late reading is superseded by the
+next one, and a lost one costs nothing. Putting state on the request channel
+would mean steady traffic to deliver something nobody asked for.
+
+So there is a second channel, shaped for state rather than events:
+
+```text
+        requests / responses          ← events, over the socket pair
+Master ◄────────────────────────► Worker
+       ─────────────────────────
+        shared memory table           ← state, read whenever the Master likes
+```
+
+Each worker owns one fixed-size slot and writes its own numbers into it; the
+Master reads them on the tick it already runs. No message, no wakeup, and
+nothing new for the event loop to watch.
+
 ---
 
 ## Unix Domain Sockets
@@ -565,11 +617,17 @@ SplQueue
 
 # Worker Lifecycle
 
-Each Worker has a state. A forked worker is IDLE right away: its socket is
-created before the fork, so the Master can dispatch to it immediately -
-there is no readiness handshake to wait for.
+Each Worker has a state. A forked worker starts STARTING and becomes
+dispatchable only when it says so: the application's own warm-up - a
+database connection, a primed cache - runs inside the worker, and the Master
+cannot see when that finished. Only the worker can, so it sends one READY
+message.
 
 ```text
+STARTING
+    │
+    │  READY  ── the worker's warm-up is done
+    ▼
    IDLE ◀─────────┐
     │             │
     ▼             │
@@ -589,12 +647,18 @@ STOPPING
 Possible states:
 
 ```text
+STARTING
 IDLE
 BUSY
 DRAINING
 STOPPING
 DEAD
 ```
+
+A worker that never reports ready is terminated and replaced
+(`workerBootstrapTimeoutSeconds`, 30s by default) - a warm-up that hangs on
+an unreachable database would otherwise cost one worker of capacity
+permanently, and silently.
 
 `DRAINING` is what makes graceful reload, scale-down and worker recycling
 one mechanism instead of three: the worker takes no new request, but the one

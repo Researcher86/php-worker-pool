@@ -5,6 +5,7 @@ declare(strict_types=1);
 use App\Protocol\Request;
 use App\Sdk\ServerErrorException;
 use App\Sdk\WorkerPoolClient;
+use RuntimeException;
 
 require __DIR__ . '/../vendor/autoload.php';
 
@@ -93,7 +94,7 @@ for ($c = 0; $c < $clients; $c++) {
                         $latencies[] = $each;
                     }
                 }
-            } catch (ServerErrorException | \RuntimeException) {
+            } catch (ServerErrorException | RuntimeException) {
                 $failed += $batch;
             }
         }

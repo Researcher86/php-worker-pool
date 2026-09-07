@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace App\Protocol;
 
+use JsonException;
+use RuntimeException;
+
 /**
  * The one rule for turning application data into a Message payload: an array
  * goes as-is, an object contributes its JSON-visible state - public
@@ -14,14 +17,14 @@ namespace App\Protocol;
  * caller passes a request DTO, Response when a handler answers with a
  * result DTO.
  */
-final class Payload
+final readonly class Payload
 {
     /**
      * @param array<string, mixed>|object $data
      *
      * @return array<string, mixed>
      *
-     * @throws \JsonException
+     * @throws JsonException
      */
     public static function of(array|object $data): array
     {
@@ -32,7 +35,7 @@ final class Payload
         $decoded = json_decode(json_encode($data, JSON_THROW_ON_ERROR), true, 512, JSON_THROW_ON_ERROR);
 
         if (!is_array($decoded)) {
-            throw new \RuntimeException(sprintf('%s does not expose any JSON-visible state to send', $data::class));
+            throw new RuntimeException(sprintf('%s does not expose any JSON-visible state to send', $data::class));
         }
 
         /** @var array<string, mixed> */

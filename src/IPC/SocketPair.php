@@ -15,7 +15,7 @@ namespace App\IPC;
  * master would still hold a reference to the worker's read end even if the
  * worker exits, and reads on the master's end would never see EOF.
  */
-final class SocketPair
+final readonly class SocketPair
 {
     private Socket $masterSocket;
     private Socket $workerSocket;

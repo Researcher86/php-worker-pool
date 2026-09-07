@@ -10,6 +10,9 @@ use App\Support\Clock;
 use App\Support\Logger;
 use App\Support\NullLogger;
 use App\Support\SystemClock;
+use App\Worker\Telemetry\WorkerMemory;
+use InvalidArgumentException;
+use Throwable;
 
 /**
  * Owner of every worker's lifecycle. Nothing else in the system moves a
@@ -84,14 +87,26 @@ final class WorkerPool
         private readonly Logger $logger = new NullLogger(),
         // When to replace a worker with a fresh process - off by default.
         private readonly RecyclingPolicy $recycling = new RecyclingPolicy(),
-        private readonly WorkerMemory $memory = new ProcMemory(),
+        // Who can say how much memory a worker is using. Null is the honest
+        // default: nothing in a pool can measure that on its own, so a caller
+        // that wants the memory limit has to supply the source - and one that
+        // doesn't want it pays nothing for the parameter existing.
+        private readonly ?WorkerMemory $memory = null,
         private readonly Clock $clock = new SystemClock(),
     ) {
+        // A memory limit with nothing to measure it is the failure this
+        // guards against: it would be configured, reported, and silently
+        // never enforced - worse than not asking for one at all, because
+        // the configuration says otherwise.
+        if ($recycling->maxMemoryBytes !== null && $memory === null) {
+            throw new InvalidArgumentException('a maxMemoryBytes limit needs a WorkerMemory to read workers with');
+        }
+
         try {
             for ($i = 0; $i < $workerCount; $i++) {
                 $this->register($this->launcher->launch());
             }
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             // A launch() partway through (e.g. ForkedWorkerLauncher on a
             // failed fork) throws out of the constructor entirely, so
             // $this never reaches the caller - whichever workers already
@@ -189,6 +204,34 @@ final class WorkerPool
     }
 
     /**
+     * Puts a worker into rotation on its READY message: the pool's half of
+     * the readiness handshake.
+     *
+     * Returns quietly for a pid it no longer knows - a READY can arrive from
+     * a worker the reaper removed a moment earlier, and that race is not the
+     * caller's problem to handle. WorkerProcess's table absorbs the other
+     * side of it: a READY landing on an already-draining or dead worker
+     * leaves it exactly where it is.
+     */
+    public function markReady(int $workerId): void
+    {
+        ($this->workers[$workerId] ?? null)?->markReady();
+    }
+
+    /**
+     * Every worker the pool currently holds, by pid - so a caller that must
+     * keep something in step with the pool's membership (the Dispatcher,
+     * watching each worker's socket) can see who is here, without the pool
+     * having to push notifications at it.
+     *
+     * @return array<int, WorkerProcess>
+     */
+    public function all(): array
+    {
+        return $this->workers;
+    }
+
+    /**
      * Dispatches $message to $workerId, or returns null if that worker can
      * no longer take it: with async SIGCHLD, a worker can be reaped (or
      * drained) between the caller's getAvailable() and this call -
@@ -260,7 +303,7 @@ final class WorkerPool
             if ($this->accepting) {
                 try {
                     $this->register($this->launcher->launch());
-                } catch (\Throwable $e) {
+                } catch (Throwable $e) {
                     // Same reasoning as advanceReload(): don't let a failed
                     // launch() propagate out of a SIGCHLD handler. Unlike
                     // there, there's no pid to requeue for a specific retry -
@@ -332,7 +375,7 @@ final class WorkerPool
 
             try {
                 $worker = $this->launcher->launch();
-            } catch (\Throwable $e) {
+            } catch (Throwable $e) {
                 // Couldn't launch a replacement right now (e.g. a transient
                 // fork failure under resource pressure) - put the pid back
                 // rather than losing track of it, so a later call (the next
@@ -394,7 +437,9 @@ final class WorkerPool
                 $reason = $this->recycling->exhaustedReason(
                     $worker,
                     $now,
-                    $this->recycling->maxMemoryBytes === null ? null : $this->memory->measure($pid),
+                    // Null unless a memory limit is actually set: the
+                    // constructor guarantees a source exists whenever it is.
+                    $this->recycling->maxMemoryBytes === null ? null : $this->memory?->measure($pid),
                 );
 
                 if ($reason === null) {
@@ -406,7 +451,7 @@ final class WorkerPool
                 // pool. It'll be retried next tick, still over its limit.
                 try {
                     $replacement = $this->launcher->launch();
-                } catch (\Throwable $e) {
+                } catch (Throwable $e) {
                     $this->logger->log('recycle: keeping worker ' . $pid . ' - no replacement could be launched: ' . $e->getMessage());
 
                     break;
@@ -453,16 +498,20 @@ final class WorkerPool
      *
      * @return int how many were signalled this pass
      */
-    public function terminateStuckWorkers(float $limitSeconds): int
+    public function terminateStuckWorkers(float $limitSeconds, ?float $bootstrapLimitSeconds = null): int
     {
-        return $this->withSigchldDeferred(function () use ($limitSeconds): int {
+        return $this->withSigchldDeferred(function () use ($limitSeconds, $bootstrapLimitSeconds): int {
             $now = $this->clock->now();
             $signalled = 0;
 
             foreach ($this->workers as $pid => $worker) {
-                $working = $worker->getWorkingSeconds($now);
+                if ($worker->isDraining()) {
+                    continue;
+                }
 
-                if ($working === null || $working < $limitSeconds || $worker->isDraining()) {
+                $reason = $this->stuckReason($worker, $now, $limitSeconds, $bootstrapLimitSeconds);
+
+                if ($reason === null) {
                     continue;
                 }
 
@@ -473,18 +522,61 @@ final class WorkerPool
                     $worker->markTerminating();
                     $signalled++;
 
-                    $this->logger->log(sprintf(
-                        'terminating worker %d: request "%s" has run %.1fs (max %.1fs)',
-                        $pid,
-                        (string) $worker->getCurrentRequestId(),
-                        $working,
-                        $limitSeconds,
-                    ));
+                    $this->logger->log(sprintf('terminating worker %d: %s', $pid, $reason));
                 }
             }
 
             return $signalled;
         });
+    }
+
+    /**
+     * The two ways a worker can occupy a slot without making progress, and
+     * why they share one sweep: both end identically (SIGTERM, SIGKILL on
+     * the next pass, reaped and replaced), and both mean "this one is not
+     * going to become useful on its own".
+     *
+     * What is stuck differs. An execution overrun is a REQUEST that will
+     * never finish - the client left long ago, the worker still holds it. A
+     * bootstrap overrun is the WORKER: forked, never said READY, and without
+     * this it would sit in STARTING forever, costing the pool one worker of
+     * capacity that nothing would ever notice missing.
+     */
+    private function stuckReason(
+        WorkerProcess $worker,
+        float $now,
+        float $limitSeconds,
+        ?float $bootstrapLimitSeconds,
+    ): ?string {
+        if ($worker->isStarting()) {
+            $age = $worker->getAgeSeconds($now);
+
+            return $bootstrapLimitSeconds !== null && $age >= $bootstrapLimitSeconds
+                ? sprintf('never reported ready in %.1fs (max %.1fs)', $age, $bootstrapLimitSeconds)
+                : null;
+        }
+
+        $working = $worker->getWorkingSeconds($now);
+
+        if ($working === null || $working < $limitSeconds) {
+            return null;
+        }
+
+        return sprintf(
+            'request "%s" has run %.1fs (max %.1fs)',
+            (string) $worker->getCurrentRequestId(),
+            $working,
+            $limitSeconds,
+        );
+    }
+
+    /**
+     * How many workers are forked but still warming up - capacity that is
+     * on its way rather than missing (see Autoscaler).
+     */
+    public function countStarting(): int
+    {
+        return count(array_filter($this->workers, static fn (WorkerProcess $w) => $w->isStarting()));
     }
 
     /** How many workers are on their way out but not stopped yet. */
@@ -547,7 +639,7 @@ final class WorkerPool
             for ($i = 0; $i < $count; $i++) {
                 try {
                     $worker = $this->launcher->launch();
-                } catch (\Throwable $e) {
+                } catch (Throwable $e) {
                     $this->logger->log(sprintf('scale-up stopped early at %d of %d workers: %s', $launched, $count, $e->getMessage()));
 
                     break;

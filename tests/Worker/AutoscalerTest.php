@@ -14,6 +14,39 @@ use PHPUnit\Framework\TestCase;
 
 final class AutoscalerTest extends TestCase
 {
+    /**
+     * A queue waiting on a warm-up is not a queue waiting on more workers.
+     * Workers in STARTING are capacity already on its way: scaling on top of
+     * them double-counts the shortfall and forks processes that have to do
+     * the same expensive bootstrap all over again.
+     */
+    public function testDoesNotGrowWhileWorkersAreStillWarmingUp(): void
+    {
+        $queue = new RequestQueue();
+        $pool = new WorkerPool(2, new FakeWorkerLauncher(starting: true), maxWorkers: 16);
+        $scaler = new Autoscaler($pool, $queue, 2, 16);
+
+        $queue->enqueue(new Message(MessageType::REQUEST, 'req-1'));
+
+        // No worker is idle - because both are still starting.
+        $this->assertSame(0, $pool->countIdle());
+        $this->assertSame(2, $pool->countStarting());
+
+        $scaler->check();
+
+        $this->assertSame(2, $pool->count(), 'capacity is coming; asking for more would double-count it');
+
+        // Once they report ready the queue is served by the workers that
+        // already existed, and there was never anything to scale.
+        foreach (array_keys($pool->all()) as $pid) {
+            $pool->markReady($pid);
+        }
+
+        $this->assertSame(2, $pool->countIdle());
+
+        $pool->stop();
+    }
+
     public function testScalesUpWhenQueueHasWorkAndNoIdleCapacity(): void
     {
         $pool = new WorkerPool(2, new FakeWorkerLauncher());

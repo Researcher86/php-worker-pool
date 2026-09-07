@@ -2,7 +2,9 @@
 
 declare(strict_types=1);
 
-namespace App\Worker;
+namespace App\Protocol;
+
+use RuntimeException;
 
 /**
  * The request payload doesn't fit the DTO the application handler declared
@@ -11,6 +13,6 @@ namespace App\Worker;
  * the former with `invalid_payload` and the latter with `handler_failed`,
  * so the two are distinguishable on the wire.
  */
-final class PayloadHydrationException extends \RuntimeException
+final class PayloadHydrationException extends RuntimeException
 {
 }

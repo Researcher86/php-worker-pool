@@ -7,6 +7,12 @@ namespace App\Worker;
 use App\IPC\SocketPair;
 use App\Protocol\Request;
 use App\Protocol\Response;
+use App\Support\Logger;
+use App\Support\NullLogger;
+use App\Worker\Runtime\WorkerRunner;
+use App\Worker\Telemetry\SharedTelemetry;
+use Closure;
+use RuntimeException;
 
 /**
  * The real WorkerLauncher: forks an OS child process that runs the worker
@@ -18,11 +24,22 @@ use App\Protocol\Response;
  * bin/server.php) reaches every worker - including replacements and
  * scale-ups forked long after startup - without any serialization.
  */
-final class ForkedWorkerLauncher implements WorkerLauncher
+final readonly class ForkedWorkerLauncher implements WorkerLauncher
 {
-    /** @param \Closure(Request): Response|null $handler */
     public function __construct(
-        private readonly ?\Closure $handler = null,
+        /** @var Closure(Request): Response|null */
+        private ?Closure $handler = null,
+        // Where forked workers publish their own vitals. Null runs the pool
+        // exactly as before, with the Master measuring workers from outside
+        // (see SharedTelemetry, ShmWorkerMemory).
+        private ?SharedTelemetry $telemetry = null,
+        /** @var (Closure(Logger): void)|null */
+        // The application's per-worker warm-up, run in the child before it
+        // reports READY (see WorkerRunner). Like $handler, it reaches every
+        // worker through fork() - including replacements forked hours later.
+        private ?Closure $bootstrap = null,
+        // Passed on to the warm-up so it logs like the rest of the runtime.
+        private Logger $logger = new NullLogger(),
     ) {
     }
 
@@ -40,12 +57,23 @@ final class ForkedWorkerLauncher implements WorkerLauncher
     {
         $socketPair = new SocketPair();
 
+        // Reserved BEFORE the fork so both processes inherit the same slot
+        // index: the child couldn't be told one afterwards without a message,
+        // and the parent picking it is what keeps reservation single-writer
+        // and lock-free. Null when the segment is full or unavailable - the
+        // worker then simply runs untelemetered.
+        $slot = $this->telemetry?->reserve();
+
         $pid = pcntl_fork();
         if ($pid === -1) {
             // Throwing lets the caller (Master's try/finally) tear down the
             // pool and sockets instead of die()'ing from inside here, which
             // would skip that cleanup.
-            throw new \RuntimeException('fork failed');
+            if ($slot !== null) {
+                $this->telemetry->release($slot);
+            }
+
+            throw new RuntimeException('fork failed');
         }
 
         if ($pid === 0) {
@@ -69,13 +97,23 @@ final class ForkedWorkerLauncher implements WorkerLauncher
 
             $socketPair->closeMaster();
 
-            $runner = new WorkerRunner($socketPair->getWorkerSocket(), $this->handler);
+            $runner = new WorkerRunner(
+                $socketPair->getWorkerSocket(),
+                $this->handler,
+                $slot,
+                $this->bootstrap,
+                $this->logger,
+            );
             $runner->run();
 
             exit(0);
         }
 
         $socketPair->closeWorker();
+
+        if ($slot !== null) {
+            $this->telemetry->bind($slot, $pid);
+        }
 
         return new WorkerProcess($pid, $socketPair->getMasterSocket());
     }

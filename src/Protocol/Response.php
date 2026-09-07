@@ -27,8 +27,8 @@ namespace App\Protocol;
  */
 final readonly class Response
 {
-    /** @param array<string, mixed> $payload */
     public function __construct(
+        /** @var array<string, mixed> */
         public array $payload = [],
         public bool $successful = true,
     ) {

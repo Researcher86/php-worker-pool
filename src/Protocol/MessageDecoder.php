@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Protocol;
 
+use JsonException;
+
 final class MessageDecoder
 {
     private string $buffer = '';
@@ -28,7 +30,7 @@ final class MessageDecoder
      *
      * @return list<Message>
      *
-     * @throws \JsonException
+     * @throws JsonException
      * @throws MalformedMessageException
      */
     public function decode(string $data): array
@@ -66,14 +68,14 @@ final class MessageDecoder
     }
 
     /**
-     * @throws \JsonException
+     * @throws JsonException
      * @throws MalformedMessageException
      */
     private function parse(string $payload): Message
     {
         try {
             $data = json_decode($payload, true, 512, JSON_THROW_ON_ERROR);
-        } catch (\JsonException $e) {
+        } catch (JsonException $e) {
             throw new MalformedMessageException('Invalid JSON payload: ' . $e->getMessage(), 0, $e);
         }
 

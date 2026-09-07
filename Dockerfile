@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y \
         htop \
     && pecl install xdebug \
     && docker-php-ext-enable xdebug \
-    && docker-php-ext-install pcntl posix sysvmsg sysvsem sysvshm \
+    && docker-php-ext-install pcntl posix shmop \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer

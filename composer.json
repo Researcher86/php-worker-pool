@@ -15,7 +15,8 @@
     "require": {
         "php": "^8.5",
         "ext-pcntl": "*",
-        "ext-posix": "*"
+        "ext-posix": "*",
+        "ext-shmop": "*"
     },
     "require-dev": {
         "phpstan/phpstan": "^2.2",

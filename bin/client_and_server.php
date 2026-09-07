@@ -5,10 +5,11 @@ declare(strict_types=1);
 use App\Contract\Calculate\CalculateAction;
 use App\Contract\Calculate\CalculateRequest;
 use App\Master\Master;
+use App\Protocol\PayloadHydrator;
 use App\Protocol\Request;
 use App\Protocol\Response;
 use App\Sdk\WorkerPoolClient;
-use App\Worker\PayloadHydrator;
+use App\Support\Logger;
 
 require __DIR__ . '/../vendor/autoload.php';
 
@@ -38,11 +39,25 @@ if ($serverPid === 0) {
         };
     };
 
+    // The per-worker warm-up, stubbed: it runs inside each forked worker,
+    // before that worker reports READY, and nothing is dispatched to a
+    // worker that hasn't reported. See bin/server.php for what belongs in
+    // here and why it must open its resources rather than inherit them.
+    //
+    // Watch the output: every worker logs its own pid, and the request below
+    // is answered only after one of them has finished warming up - which is
+    // the whole point of the handshake, made visible.
+    $bootstrap = static function (Logger $logger): void {
+        usleep(250_000);
+
+        $logger->log(sprintf('worker %d: warmed up, reporting ready', posix_getpid()));
+    };
+
     // A Master that fails to start must say so and exit non-zero, or the
     // parent below would wait out its whole readiness budget with nothing to
     // report but a timeout.
     try {
-        (new Master(socketPath: $socketPath, handler: $handler))->run();
+        (new Master(socketPath: $socketPath, handler: $handler, bootstrap: $bootstrap))->run();
     } catch (Throwable $e) {
         fwrite(STDERR, 'server: ' . $e->getMessage() . "\n");
 
@@ -95,9 +110,15 @@ $awaitServer($socketPath, $serverPid);
 try {
     $client = new WorkerPoolClient($socketPath);
 
+    // Timed on purpose: the Master accepts this connection immediately, but
+    // the request waits in the queue until a worker has finished its
+    // warm-up. The elapsed figure is the readiness handshake being paid for
+    // once, here, instead of by whoever sends the first request.
+    $startedAt = microtime(true);
     $response = $client->call(new Request('calculate', new CalculateRequest(a: 10, b: 20)));
 
     echo json_encode($response) . "\n";
+    printf("answered in %.0fms (a cold worker had to warm up first)\n", (microtime(true) - $startedAt) * 1000);
 } finally {
     posix_kill($serverPid, SIGTERM);
     pcntl_waitpid($serverPid, $status);

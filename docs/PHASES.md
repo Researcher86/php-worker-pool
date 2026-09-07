@@ -487,13 +487,20 @@ machine deleted the map and gave worker recycling the same mechanism for
 free. See "Recycling, Benchmarks, Onboarding" below, and README's Worker
 Lifecycle for the current diagram.
 
-**Later removal:** `STARTING` was folded into `IDLE`. It never meant "not
-ready yet" - a worker's socket exists from before the fork, so a freshly
-forked worker can be dispatched to immediately - it only meant "never
-dispatched to yet", which `WorkerProcess::getHandledRequests()` already
-says. Behaviourally the two were one state: every list of states in the pool
-held both side by side, and forgetting one of them is exactly the
+**Later removal, and its return:** `STARTING` was folded into `IDLE`,
+because it never meant "not ready yet" - a worker's socket exists from
+before the fork, so a freshly forked worker could be dispatched to
+immediately - it only meant "never dispatched to yet", which
+`WorkerProcess::getHandledRequests()` already says. Behaviourally the two
+were one state, and forgetting one of them is exactly the
 `retireIdleWorkers()` bug recorded under Phase 19 below.
+
+It came back later with the opposite meaning, which is the condition the
+removal itself named: the readiness handshake. A worker now runs the
+application's warm-up before announcing READY, and STARTING is the state it
+sits in until then - genuinely "not ready yet", and the one state the
+transition table refuses to dispatch from. See "Readiness handshake" in
+DECISIONS.md.
 
 ## Tasks
 

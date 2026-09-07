@@ -11,10 +11,13 @@ use App\Protocol\MessageType;
 use App\Queue\RequestQueue;
 use App\Tests\Worker\FakeWorkerLauncher;
 use App\Worker\WorkerPool;
+use App\Tests\Support\AwaitsReadyWorkers;
 use PHPUnit\Framework\TestCase;
 
 final class DispatcherTest extends TestCase
 {
+    use AwaitsReadyWorkers;
+
     /**
      * Ticks the loop until $responses holds $expected messages - bounded, so
      * a response that never arrives fails an assertion instead of hanging
@@ -37,6 +40,7 @@ final class DispatcherTest extends TestCase
     public function testProcessesMoreRequestsThanWorkersThroughTheQueue(): void
     {
         $pool = new WorkerPool(2);
+        $this->awaitReadyWorkers($pool);
         $loop = new EventLoop();
         $responses = [];
 
@@ -70,6 +74,7 @@ final class DispatcherTest extends TestCase
     public function testWorkerDyingMidRequestReportsWorkerCrashed(): void
     {
         $pool = new WorkerPool(1);
+        $this->awaitReadyWorkers($pool);
         $loop = new EventLoop();
         $responses = [];
 

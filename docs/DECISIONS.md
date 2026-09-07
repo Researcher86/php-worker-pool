@@ -23,6 +23,9 @@ how a request flows through it today, see
 - [Execution timeout, and testing the signal races](#execution-timeout-and-testing-the-signal-races)
 - [Failure semantics and invariant tests](#failure-semantics-and-invariant-tests)
 - [Latency breakdown](#latency-breakdown)
+- [Worker telemetry over shared memory](#worker-telemetry-over-shared-memory)
+- [Readiness handshake](#readiness-handshake)
+- [Where Worker/ was split, and where it wasn't](#where-worker-was-split-and-where-it-wasnt)
 - [Socket permissions](#socket-permissions)
 - [Zombie processes after the test suite](#zombie-processes-after-the-test-suite)
 - [Where the code ended up, and why](#where-the-code-ended-up-and-why)
@@ -335,6 +338,30 @@ Details worth knowing:
   than blocking forever.
 - A dropped connection clears everything in flight (nothing pending could
   ever arrive) and the next `send()` reconnects.
+
+`allWithin()` was added later for the case `all()` deliberately refuses to
+serve: fan-in where a partial answer is worth more than a failure. A page
+built from orders, profile and recommendations should lose the
+recommendations block when that source is slow, not the page.
+
+Two things had to be decided rather than copied from `all()`:
+
+- **A budget for the group, not per request.** Per-request timeouts run from
+  each `send()` independently, so three requests at 5s can keep a caller
+  waiting 5s even though two answered in milliseconds - the slowest sets the
+  pace. `allWithin($seconds, ...)` states the total the caller is willing to
+  spend, which is the number an HTTP handler actually has.
+- **What a missing answer looks like.** Results keep their handle's
+  position, so a missing position IS the signal - no null-filled slots to
+  interpret, and no exception to catch per source. Timeouts and
+  `ServerErrorException` both degrade to "not there"; a dropped connection
+  does not, because nothing in flight can arrive over a socket that is gone
+  and a partial result would then be lying about why it is partial.
+
+Handles the budget didn't cover are abandoned - their deadline is dropped,
+which is what makes a late answer discardable instead of a payload buffered
+forever in a client that a long-lived FPM worker reuses. Awaiting one
+afterwards throws `LogicException`, the same as awaiting twice.
 
 Covered by `WorkerPoolClientTest` (a forked server that reads every request
 before answering any - only possible if the client didn't block on the
@@ -676,24 +703,34 @@ src/
 ├── Dispatcher/
 │   └── Dispatcher.php
 │
-├── Worker/
+├── Worker/                  # the MASTER's side: supervision
 │   ├── WorkerPool.php
 │   ├── WorkerProcess.php
-│   ├── WorkerRunner.php
 │   ├── WorkerState.php
 │   ├── WorkerCrash.php
 │   ├── WorkerLauncher.php
 │   ├── ForkedWorkerLauncher.php
 │   ├── Autoscaler.php
-│   ├── PayloadHydrator.php
-│   └── PayloadHydrationException.php
+│   ├── RecyclingPolicy.php
+│   │
+│   ├── Runtime/             # the WORKER's side: runs in the forked child
+│   │   └── WorkerRunner.php
+│   │
+│   └── Telemetry/           # what a worker reports about itself
+│       ├── WorkerMemory.php     # what a worker's memory reading is
+│       ├── ShmWorkerMemory.php  #   ...as the worker itself reports it
+│       ├── SharedTelemetry.php  # the segment, its slots and their seqlock
+│       ├── TelemetrySlot.php    # one worker's write handle into it
+│       └── WorkerVitals.php
 │
 ├── Protocol/
 │   ├── Message.php
 │   ├── MessageType.php
 │   ├── MessageEncoder.php
 │   ├── MessageDecoder.php
-│   ├── Payload.php
+│   ├── Payload.php               # DTO -> payload
+│   ├── PayloadHydrator.php       # payload -> DTO
+│   ├── PayloadHydrationException.php
 │   ├── Request.php
 │   ├── Response.php
 │   └── MalformedMessageException.php
@@ -742,3 +779,274 @@ src/
 ```
 
 ---
+
+# Worker telemetry over shared memory
+
+Started as the opposite question: a plan to move the whole master↔worker
+channel onto System V message queues. That was rejected, and the reasoning is
+worth keeping because it is what shaped this feature. The two load-bearing
+objections were:
+
+- **A SysV queue has no file descriptor.** It cannot go into
+  `stream_select()`, so the Master would have had to poll for responses -
+  turning the one property the Dispatcher is built around ("dispatch is
+  triggered only by events, never by polling") into a 2ms spin that
+  degrades the client sockets too, not just the worker channel.
+- **MSGMAX is 8 KiB.** Against 1 MiB on the socket today, and raising it is
+  a privileged host-level sysctl. Compressing to fit would have made the
+  limit depend on how compressible a payload happened to be - a message size
+  cap that passes or fails on the entropy of the data.
+
+But one part of the idea was right: **not everything that crosses the
+process boundary is an event.** Requests and responses are - somebody is
+waiting for each one, and a socket the event loop can wait on is exactly the
+right shape. A worker's memory use is not: nobody waits for it, a late
+reading is superseded by the next one, a lost one costs nothing, and the
+Master already polls for it on a tick it runs anyway. That is state, and
+state wants a different channel.
+
+So the transport stayed a socket pair, and the *state* moved to shared
+memory (`ext-shmop`), where it costs no message, no fd, and nothing that
+ever has to wake anybody up.
+
+## What it fixed
+
+The Master used to read `/proc/<pid>/statm` - the only way to measure a
+worker from outside. Two problems, both real:
+
+1. **It is Linux-only.** On macOS, or a container without /proc, it returns
+   null and `maxMemoryBytes` is silently never enforced. A recycling limit
+   that quietly doesn't exist is worse than no limit at all, because the
+   configuration says otherwise.
+2. **It measures the wrong quantity.** statm reports RSS: pages still shared
+   with the Master after fork, the opcache, every mapping the process never
+   asked for. What the limit is *about* is PHP heap growing inside a
+   long-lived worker, which is `memory_get_usage(true)` - a number only that
+   worker can obtain, and now the one it publishes.
+
+## The design, and what each part is defending against
+
+- **Fixed-size slots, no allocator.** A worker writes at an offset derived
+  from its own index, so nothing it can do - including dying mid-write -
+  corrupts anything but its own slot.
+- **Seqlock.** One writer per slot means writes never race each other, but a
+  reader can still catch one half-applied, and a torn memory figure would
+  recycle a healthy worker. The writer brackets the body with an odd/even
+  counter; a reader that sees an odd value, or a different one afterwards,
+  discards the reading. Discarding is free - the next tick reads again.
+- **The Master reserves slots, never a worker.** One reserver means no lock,
+  and it happens before the fork so both processes inherit the same index
+  without anything being sent to the child.
+- **Every reading carries its author's pid.** Slots are reused once their
+  worker is gone (`posix_kill($pid, 0)`), so a stale reading must never be
+  attributed to whoever inherits the slot next. Reserve also zeroes it.
+- **`ftok()` over an anchor file, not a random key.** A segment is
+  kernel-persistent: a SIGKILLed Master leaves one behind. A random key would
+  make that orphan unfindable and therefore permanent, so the key is derived
+  from a small anchor file next to the socket, and startup removes whatever
+  it finds there before creating its own. The anchor is deleted only once the
+  segment really is gone - `ftok()` hashes the inode, so dropping it earlier
+  would hand the next Master a different key and strand the orphan for good.
+  Verified by hand: `kill -9` the Master, see the orphan in `ipcs -m`, start
+  a successor, see one segment with a new id.
+
+## What was deliberately left out
+
+A heartbeat, to tell a handler stuck in an infinite loop from one that is
+merely slow. It doesn't work: neither of them publishes anything while
+inside the handler, so the two look identical from the Master's side. Making
+it work would need the *handler* to check in - a cooperative ping, which
+changes the `Request in, Response out` contract that WorkerRunner exists to
+keep fixed. That is a decision about the application contract, not a
+telemetry detail, so it isn't smuggled in here. The execution timeout stays
+what it is: a timer from dispatch.
+
+## No fallback, on purpose
+
+`ProcMemory` survived the first cut as a fallback for hosts without shared
+memory, and then didn't survive review: `ext-shmop` is a hard requirement in
+composer.json, the Master always builds `ShmWorkerMemory`, and the only tests
+that set a memory limit pass their own double. The fallback was code that
+nothing could reach, kept alive by a "what if" the dependency list had
+already answered - and it measured a different quantity from the one the
+limit is about, so reaching it would have been the bug, not the rescue.
+
+What replaced it is a constructor guard rather than another default:
+`WorkerPool` takes `?WorkerMemory` and refuses a `maxMemoryBytes` limit with
+no source to read it from. The failure being designed out is the same one
+/proc used to produce quietly - a limit that is configured, reported in the
+metrics, and never once enforced - except now it is a startup error instead
+of a silence.
+
+## Cost
+
+Three small writes per request on the worker's hot path. Benchmarked at
+4 clients x 1500 requests, three runs each way: 17.5-18.7k req/s with
+telemetry against 15.8-18.0k without - the difference is smaller than the
+spread between runs, so the honest statement is that it isn't measurable
+here, not that it is free.
+
+---
+
+# Readiness handshake
+
+Came out of a suggestion to move the pool from push to pull scheduling -
+workers asking for work instead of the Master choosing a worker. Most of
+that idea was already in the code: `Dispatcher` registers a worker's socket
+and calls `pump()` the moment an answer arrives, so a worker's RESPONSE is
+already its "I am free" signal, arriving as an event. A separate READY
+message per request would have added one message and one round trip and
+changed nothing about the scheduling.
+
+But one case in it was real, and it is the one where readiness does NOT
+coincide with finishing a request: **a fork is not a usable worker**. The
+application's warm-up - connecting to a database, priming a cache - runs
+inside the child, and the Master cannot see when it finished. Only the
+worker can. So the worker says it, once, with a READY message, and until
+then it sits in STARTING and the transition table refuses to dispatch there.
+
+This is exactly the condition the removal of STARTING named as its own
+undoing: "If a readiness handshake ever lands - a worker confirming its
+bootstrap before work is sent to it - the state comes back with the opposite
+meaning." It did, and it does.
+
+## Why the bootstrap hook is where it is
+
+`ForkedWorkerLauncher` runs it in the child, after `pcntl_fork()`, before
+READY. That placement is the point, not an implementation detail: a database
+connection opened in the Master and inherited through fork() would be ONE
+socket shared by every worker, each writing into the others' protocol
+stream. Opened in the hook, each worker gets its own - and so does every
+replacement forked hours later, since the closure travels through fork()
+like `$handler` does.
+
+The corollary for callers: the hook must CREATE its resources, not capture
+them. A closure written as `use ($pdo)` over a connection the Master already
+opened puts the shared-socket problem straight back.
+
+Its signature is `Closure(Logger): void` rather than `Closure(): void`: the
+Master's own logger is inherited through the fork anyway, so handing it over
+costs nothing and means a warm-up reports through the same channel and
+format as the runtime - and can be captured in a test - instead of every
+application reaching for `fwrite(STDERR)` and inventing its own.
+
+## What it cost elsewhere
+
+**Watching sockets for a worker's whole life.** Registration used to last
+only while a worker was BUSY, which worked while the only thing a worker
+ever sent was an answer to something. READY arrives when the worker is NOT
+busy and nothing was sent to it, so nobody would have been listening.
+`Dispatcher` now watches every worker from the moment it appears, and
+reconciles that set against the pool on each `pump()` - pulled rather than
+pushed, because workers appear in several places (a crash replacement forked
+inside a SIGCHLD handler, a scale-up, a reload wave) and one loop beats five
+notification call sites.
+
+That reconciliation has an ordering that looks arbitrary and is not:
+departures are deregistered BEFORE arrivals are registered. EventLoop keys
+its maps by `(int) $resource`, and PHP hands a closed stream's id straight
+back to the next stream opened - so a crash replacement can carry the very
+id its predecessor just released. Registering first would have deleted the
+handler just installed, and that worker's READY would have arrived at a
+socket nobody was listening to: one worker short, silently, forever.
+
+**EventLoop had to stop trusting its own registry.** With sockets watched
+for a worker's whole life, the loop started being handed resources their
+owner had closed - `retireIdleWorkers()` closes a retiring worker's socket
+while the worker stays in the pool until SIGCHLD reaps it. `stream_select()`
+answers that with a TypeError, which took the whole Master down (found by
+running the chaos suite, not by reasoning). `tick()` now drops closed
+resources before selecting. The alternative - every owner deregistering
+first, on every path including the ones that throw - is coupling the loop
+does not need: a closed resource is never going to be ready again, so
+forgetting it is always right.
+
+**A second way to be stuck.** `terminateStuckWorkers()` gained a bootstrap
+limit alongside the execution limit, rather than a sweep of its own: both
+mean "this worker will not become useful on its own", and both end
+identically (SIGTERM, SIGKILL next pass, reaped and replaced). What is stuck
+differs - an execution overrun is a REQUEST that will never finish, a
+bootstrap overrun is the WORKER - so the sweep tells them apart in one
+place, `stuckReason()`, and the log line says which happened.
+
+## The bug it introduced, found by running it
+
+A warm-up makes workers slow to appear, and the Autoscaler read that as
+workers missing. Its scale-up condition was "queue not empty and no idle
+worker" - and a worker in STARTING is not idle, so a queue waiting on a
+bootstrap looked exactly like a queue waiting on too few workers. Measured
+with a 3s warm-up, a floor of 2 and five queued requests: the pool grew to 4
+while its first two workers were still connecting, forked two more that then
+had to do the same expensive bootstrap, and shrank back once everyone
+reported ready. A burst of database connections at precisely the moment a
+deploy is most fragile.
+
+The condition now also requires `countStarting() === 0`: workers warming up
+are capacity ON ITS WAY, not capacity missing, and scaling on top of them
+double-counts the shortfall. Same measurement after the fix: peak 2. This is
+the same reasoning a scheduler uses when it declines to add replicas while
+pods are still Pending.
+
+## What was NOT taken from the pull idea
+
+**Prefetch** - a worker holding the next request while it answers the
+current one. It buys a round trip on the hot path and costs the invariant
+`InvariantsTest` asserts (one request per worker at a time), makes a crash
+lose two requests instead of one, and changes what the execution timeout
+measures. Not worth it without a benchmark showing the round trip matters.
+
+**Worker-side backpressure** - a worker saying "not now" because it is
+degraded. Interesting, but it needs a policy nobody has asked for yet.
+
+## Cost
+
+One extra message per worker per lifetime, not per request. The hot path is
+untouched: 16.2-17.1k req/s after, against 15.8-18.7k measured across
+earlier runs of the same benchmark - inside the run-to-run spread.
+
+---
+
+# Where Worker/ was split, and where it wasn't
+
+`src/Worker/` had grown to sixteen files holding three unrelated jobs, and
+the one boundary that matters most in this codebase - the fork - was
+invisible in the layout: `WorkerRunner` (which runs in the child, and cannot
+touch the Master's state) sat in the same directory as `WorkerPool` (which
+is the Master's state).
+
+Three moves, each for its own reason:
+
+**`PayloadHydrator` -> `Protocol/`.** It was never about workers. `bin/`
+uses it directly, `Protocol\Request` documents it, and it is one half of an
+operation whose other half was already in Protocol: `Payload::of()` packs a
+DTO into a payload, `PayloadHydrator::hydrate()` unpacks it back. The two
+halves now live together.
+
+**Telemetry -> `Worker/Telemetry/`.** A self-contained subsystem with its
+own transport (shared memory), its own wire format, and exactly one contract
+facing the rest of the pool - the `WorkerMemory` interface. It moves whole,
+tearing nothing.
+
+It was tempting to put `SharedTelemetry` in `IPC/` instead: a shm segment
+really is a second channel between Master and workers, the same category as
+`SocketPair`. It stayed out because it knows about worker pids, about
+reserving a slot before the fork, and about the shape of `WorkerVitals` -
+moving it would have dragged worker-domain knowledge into `IPC/`. Splitting
+it into a generic slot table plus a domain format on top would fix that and
+buy nothing at 387 lines.
+
+**`WorkerRunner` -> `Worker/Runtime/`.** The fork boundary, finally stated
+in the layout: everything under `Runtime/` executes in the child.
+
+What was deliberately NOT split: supervision itself. `WorkerPool` is 800
+lines and stays one class - see its docblock and the note above about why
+breaking it into a Recycler, a ReloadManager and a Scaler would recreate the
+races the single owner exists to prevent. Directories were the problem;
+`WorkerPool` was not.
+
+`IPC/` was reviewed in the same pass and left alone. `Socket` is used by all
+three channels (SDK to Master, Master to worker, client connections),
+`SocketPair` is the fork primitive, `ConnectionClosedException` is their
+failure - all of it inter-process transport, which is what the directory says.
+The only inaccuracy is the name `Socket` for what is really a framed message
+channel, and renaming it across five files buys a shade of meaning.

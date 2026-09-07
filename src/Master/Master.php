@@ -23,7 +23,12 @@ use App\Support\SystemClock;
 use App\Worker\Autoscaler;
 use App\Worker\ForkedWorkerLauncher;
 use App\Worker\RecyclingPolicy;
+use App\Worker\Telemetry\SharedTelemetry;
+use App\Worker\Telemetry\ShmWorkerMemory;
 use App\Worker\WorkerPool;
+use Closure;
+use RuntimeException;
+use Throwable;
 
 final class Master
 {
@@ -31,6 +36,15 @@ final class Master
     // all) to sweep for expired requests. Bounds how late a timeout can be
     // detected, not how precisely - see PendingRequestRegistry::removeExpired().
     private const float TIMEOUT_CHECK_INTERVAL_SECONDS = 1.0;
+
+    // Room for every worker plus the ones on their way out: a slot stays
+    // taken until its worker is really gone, so a pool churning at its
+    // ceiling (a reload, a burst of recycling) briefly needs more slots than
+    // it has workers. Capped so an absurd maxWorkers can't ask the kernel
+    // for an absurd segment - past the cap the extra workers just run
+    // untelemetered.
+    private const int TELEMETRY_SLOTS_PER_WORKER = 2;
+    private const int MAX_TELEMETRY_SLOTS = 1024;
 
     private bool $running = true;
 
@@ -104,24 +118,55 @@ final class Master
             maxMemoryBytes: 256 * 1024 * 1024,
         ),
         // The application's request handler, run inside each worker:
-        // \Closure(Worker\Request): Worker\Response. This is where business
+        // Closure(Worker\Request): Worker\Response. This is where business
         // logic enters the system - defined wherever the server is
         // configured (bin/server.php), never inside the runtime. Null falls
         // back to WorkerRunner's echo default.
-        private readonly ?\Closure $handler = null,
+        private readonly ?Closure $handler = null,
+        /** @var (Closure(Logger): void)|null */
+        // Run once inside each worker before it reports READY: the
+        // application's warm-up (database connection, primed cache). Until it
+        // returns, that worker is STARTING and nothing is dispatched to it -
+        // so a first request never pays for a cold process. It is handed the
+        // Logger below, so a warm-up reports where everything else does.
+        private readonly ?Closure $bootstrap = null,
+        // How long a worker may take to report READY before it is treated as
+        // broken and replaced. Without a ceiling, a bootstrap that hangs
+        // (an unreachable database, say) would cost one worker of capacity
+        // permanently, and silently - nothing else in the system would ever
+        // ask why that worker never did anything.
+        private readonly float $workerBootstrapTimeoutSeconds = 30.0,
     ) {
     }
 
     public function run(): void
     {
-        $this->pool = new WorkerPool(
-            $this->minWorkers,
-            new ForkedWorkerLauncher($this->handler),
-            maxWorkers: $this->maxWorkers,
-            logger: $this->logger,
-            recycling: $this->recycling,
-            clock: $this->clock,
+        // Anchored next to the socket so a Master that was SIGKILLed leaves
+        // a segment its successor can find and remove.
+        $telemetry = SharedTelemetry::openAt(
+            $this->socketPath . '.telemetry',
+            min($this->maxWorkers * self::TELEMETRY_SLOTS_PER_WORKER, self::MAX_TELEMETRY_SLOTS),
         );
+
+        try {
+            $this->pool = new WorkerPool(
+                $this->minWorkers,
+                new ForkedWorkerLauncher($this->handler, $telemetry, $this->bootstrap, $this->logger),
+                maxWorkers: $this->maxWorkers,
+                logger: $this->logger,
+                recycling: $this->recycling,
+                memory: new ShmWorkerMemory($telemetry),
+                clock: $this->clock,
+            );
+        } catch (Throwable $e) {
+            // The pool failing to launch (a fork that didn't) is the one
+            // path out of run() that happens before the try/finally below
+            // exists - and a segment is kernel-persistent, so without this
+            // it would outlive the process that never even started.
+            $telemetry->destroy();
+
+            throw $e;
+        }
         $this->loop = new EventLoop();
         $this->pendingRequests = new PendingRequestRegistry($this->clock);
         $this->requestMetrics = new RequestMetrics();
@@ -163,17 +208,22 @@ final class Master
             while ($this->running) {
                 $this->loop->tick(self::TIMEOUT_CHECK_INTERVAL_SECONDS);
 
-                // Capacity can appear outside any dispatch event (a crash
-                // replacement reaped in during this tick, a scale-up, a
-                // reload's fresh generation) - give queued requests a chance
-                // to land on it.
-                $this->dispatcher->dispatchQueued();
-
                 $this->sendTimeouts();
-                $this->pool->terminateStuckWorkers($this->workerExecutionTimeoutSeconds);
+                $this->pool->terminateStuckWorkers(
+                    $this->workerExecutionTimeoutSeconds,
+                    $this->workerBootstrapTimeoutSeconds,
+                );
                 $this->pool->recycleExhaustedWorkers();
                 $this->pool->retireIdleWorkers();
                 $autoscaler->check();
+
+                // Last in the tick, on purpose: the sweeps above are what
+                // fork new workers (a replacement, a scale-up, a reload's
+                // fresh generation), and this is what starts watching their
+                // sockets for the READY they are about to send. Running it
+                // first would leave a worker forked in this tick unwatched
+                // until the next one.
+                $this->dispatcher->dispatchQueued();
             }
 
             $remaining = $this->shutdown($server);
@@ -184,6 +234,10 @@ final class Master
             // after gracefulShutdownTimeout), not 30s of draining plus a
             // separate window on top of it.
             $this->pool->stop(max(0.0, $remaining));
+
+            // After stop(): the workers are gone, so nothing is left to
+            // publish into a segment we're about to hand back to the kernel.
+            $telemetry->destroy();
 
             $this->loop->removeReadable($this->signalRead);
             fclose($this->signalRead);
@@ -217,7 +271,7 @@ final class Master
         $pipe = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
 
         if ($pipe === false) {
-            throw new \RuntimeException('Failed to create the signal self-pipe');
+            throw new RuntimeException('Failed to create the signal self-pipe');
         }
 
         [$this->signalRead, $this->signalWrite] = $pipe;

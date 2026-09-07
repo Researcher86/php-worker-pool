@@ -12,15 +12,23 @@ use App\Protocol\MessageType;
 use App\Queue\RequestQueue;
 use App\Worker\WorkerPool;
 use App\Worker\WorkerProcess;
+use Closure;
 
 /**
  * Event-driven bridge between the RequestQueue and the WorkerPool.
  *
- * Dispatch is triggered only by events — a request arriving, or a worker
- * becoming idle after responding — never by polling. Each worker's socket is
- * registered with the EventLoop only while it is busy, so the master blocks
- * in a single multiplexed select across every worker currently in flight and
- * wakes up as soon as any of them has produced a response.
+ * Dispatch is triggered only by events — a request arriving, a worker
+ * announcing it is READY, or a worker becoming idle after responding — never
+ * by polling. Every worker's socket is registered with the EventLoop for as
+ * long as the worker exists, so the master blocks in a single multiplexed
+ * select and wakes as soon as any worker has something to say.
+ *
+ * Registration used to last only while a worker was BUSY, which worked while
+ * the only thing a worker ever sent was an answer. The readiness handshake
+ * broke that: READY arrives when the worker is NOT busy and nothing has been
+ * sent to it, so nobody would have been listening. Watching for the worker's
+ * whole life is both simpler and strictly more correct - an idle worker
+ * sends nothing, so it never wakes the loop anyway.
  *
  * There used to be a second, synchronous batch API here (run(): submit a
  * list, block until every response arrived) - removed once it was clear only
@@ -30,11 +38,21 @@ use App\Worker\WorkerProcess;
  */
 final class Dispatcher
 {
-    /** @var \Closure(Message): void */
-    private readonly \Closure $onResponse;
+    /** @var Closure(Message): void */
+    private readonly Closure $onResponse;
 
-    /** @var \Closure(string): void */
-    private readonly \Closure $onDispatched;
+    /** @var Closure(string): void */
+    private readonly Closure $onDispatched;
+
+    /**
+     * Sockets currently registered with the loop, by worker pid. Kept here
+     * rather than derived from the pool on the fly: once a worker is gone so
+     * is its WorkerProcess, and the resource still has to be deregistered -
+     * so the handle is remembered while it can still be used.
+     *
+     * @var array<int, resource>
+     */
+    private array $watched = [];
 
     /**
      * @param callable(Message): void $onResponse invoked with every response
@@ -51,8 +69,8 @@ final class Dispatcher
         // which nothing else can observe from outside this class.
         ?callable $onDispatched = null,
     ) {
-        $this->onResponse = \Closure::fromCallable($onResponse);
-        $this->onDispatched = \Closure::fromCallable($onDispatched ?? static function (string $id): void {
+        $this->onResponse = Closure::fromCallable($onResponse);
+        $this->onDispatched = Closure::fromCallable($onDispatched ?? static function (string $id): void {
         });
     }
 
@@ -93,34 +111,82 @@ final class Dispatcher
     }
 
     /**
-     * Registers a worker's socket with the event loop for as long as it is
-     * busy. The handler reads whatever became available, finishes the request
-     * once its response has arrived, and deregisters the socket once the
-     * worker is no longer busy (finished or dead) — a partial read (message
-     * not fully received yet) leaves it registered so the next readable
-     * event picks up the rest.
+     * Brings the set of watched sockets in line with who is actually in the
+     * pool: new workers get a handler, departed ones lose theirs.
+     *
+     * Pulled from the pool rather than pushed by it, because the pool gains
+     * and loses workers in several places (a crash replacement forked inside
+     * a SIGCHLD handler, a scale-up, a reload wave) and having each of them
+     * notify the Dispatcher would put five call sites where one loop does. It
+     * runs on every pump - every dispatch event, and once per Master tick -
+     * and costs one comparison per worker.
+     */
+    private function syncWatches(): void
+    {
+        $workers = $this->pool->all();
+
+        // Departures FIRST, and the order is load-bearing. EventLoop keys
+        // its maps by (int) $resource, and PHP hands a closed stream's id
+        // straight back to the next one opened - so a crash replacement
+        // forked moments after its predecessor's socket closed can carry the
+        // very same id. Registering the newcomer before deregistering the
+        // departed would then delete the handler just installed, and that
+        // worker's READY would arrive at a socket nobody is listening to:
+        // silently one worker short, forever.
+        foreach ($this->watched as $pid => $resource) {
+            // Gone from the pool, or still in it with its socket already
+            // closed - a worker being retired is closed while it waits to be
+            // reaped, and there is nothing left to hear from it.
+            if (!isset($workers[$pid]) || !is_resource($resource)) {
+                $this->loop->removeReadable($resource);
+                unset($this->watched[$pid]);
+            }
+        }
+
+        foreach ($workers as $pid => $worker) {
+            if (!isset($this->watched[$pid])) {
+                $this->watch($worker);
+            }
+        }
+    }
+
+    /**
+     * Registers one worker's socket for its whole life. The handler reads
+     * whatever became available and answers each message by kind: a READY
+     * puts the worker into rotation, an answer finishes its request. A
+     * partial read (message not fully received yet) simply does nothing
+     * until the next readable event brings the rest.
      */
     private function watch(WorkerProcess $worker): void
     {
         $resource = $worker->getResource();
+        $this->watched[$worker->getPid()] = $resource;
 
         $this->loop->addReadable($resource, function () use ($worker, $resource): void {
             try {
                 foreach ($worker->readAvailable() as $message) {
+                    if ($message->type === MessageType::READY) {
+                        // Bootstrap finished: STARTING -> IDLE, and the
+                        // worker becomes dispatchable for the first time.
+                        // Pump right away - this is new capacity, appearing
+                        // at a moment nothing else would notice.
+                        $this->pool->markReady($worker->getPid());
+                        $this->pump();
+
+                        continue;
+                    }
+
                     $finished = $worker->getCurrentRequestId() === $message->id;
 
                     if ($finished) {
                         $worker->finishRequest();
-                        $this->loop->removeReadable($resource);
                     }
 
                     ($this->onResponse)($message);
 
                     // PHASES.md Phase 7's second dispatch event: "Worker
                     // Response -> dispatch()". The worker just went idle -
-                    // hand it the next queued request immediately (this may
-                    // re-register the very socket deregistered above, now
-                    // watching for the new request's response).
+                    // hand it the next queued request immediately.
                     if ($finished) {
                         $this->pump();
                     }
@@ -140,6 +206,7 @@ final class Dispatcher
                 $requestId = $worker->getCurrentRequestId();
                 $worker->markDead();
                 $this->loop->removeReadable($resource);
+                unset($this->watched[$worker->getPid()]);
 
                 // For a desynced-but-still-running worker this is what ends
                 // it: closing our end gives its next read EOF, it exits, and
@@ -165,6 +232,12 @@ final class Dispatcher
      */
     private function pump(): void
     {
+        // First: a worker forked since the last pump (a crash replacement, a
+        // scale-up) has to be listened to before its READY arrives, or the
+        // announcement lands in a socket nobody watches and it never joins
+        // the rotation.
+        $this->syncWatches();
+
         while (!$this->queue->isEmpty()) {
             $workerId = $this->pool->getAvailable();
 
@@ -186,7 +259,6 @@ final class Dispatcher
             }
 
             ($this->onDispatched)($request->id);
-            $this->watch($worker);
         }
     }
 }

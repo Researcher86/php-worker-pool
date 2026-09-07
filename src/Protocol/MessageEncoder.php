@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Protocol;
 
+use JsonException;
+
 final readonly class MessageEncoder
 {
     /**
@@ -11,7 +13,7 @@ final readonly class MessageEncoder
      *
      * [ 4 bytes size (big-endian) ][ N bytes JSON payload ]
      *
-     * @throws \JsonException
+     * @throws JsonException
      */
     public function encode(Message $message): string
     {

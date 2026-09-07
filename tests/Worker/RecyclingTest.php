@@ -8,9 +8,10 @@ use App\Protocol\Message;
 use App\Protocol\MessageType;
 use App\Tests\Support\FakeClock;
 use App\Worker\RecyclingPolicy;
-use App\Worker\WorkerMemory;
+use App\Worker\Telemetry\WorkerMemory;
 use App\Worker\WorkerPool;
 use App\Worker\WorkerState;
+use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
 
 final class RecyclingTest extends TestCase
@@ -97,6 +98,22 @@ final class RecyclingTest extends TestCase
         $pool->stop();
     }
 
+    /**
+     * The limit that can't be measured is the one nobody notices: configured,
+     * reported, and never once enforced. A pool asked for one without a
+     * source of readings says so immediately instead.
+     */
+    public function testAMemoryLimitWithoutAWorkerMemoryIsRefused(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        new WorkerPool(
+            1,
+            new FakeWorkerLauncher(),
+            recycling: new RecyclingPolicy(maxMemoryBytes: 256 * 1024 * 1024),
+        );
+    }
+
     public function testWorkerIsReplacedOnceItUsesTooMuchMemory(): void
     {
         $readings = new FixedMemory(10 * 1024 * 1024);
@@ -120,9 +137,8 @@ final class RecyclingTest extends TestCase
     }
 
     /**
-     * A platform that can't report another process's memory (no /proc -
-     * macOS, some hardened containers) must simply not enforce that limit,
-     * rather than recycling on a guess or blowing up.
+     * A worker that hasn't published a reading yet must simply not have that
+     * limit enforced, rather than being recycled on a guess or blowing up.
      */
     public function testAnUnmeasurableMemoryLimitIsNotEnforced(): void
     {

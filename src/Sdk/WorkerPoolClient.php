@@ -11,6 +11,7 @@ use App\Protocol\Message;
 use App\Protocol\MessageType;
 use App\Protocol\Payload;
 use App\Protocol\Request;
+use LogicException;
 
 /**
  * Client for talking to a running Master over its Unix domain socket - meant
@@ -116,16 +117,40 @@ final class WorkerPoolClient
      */
     public function await(PendingResponse $pending): array
     {
+        // collect() returns null only when a group budget runs out, and
+        // await() has no budget: it either produces a payload or throws.
+        return $this->collect($pending, null)
+            ?? throw new LogicException('await() cannot run out of a budget it was not given');
+    }
+
+    /**
+     * The shared body of await() and allWithin(): waits for $pending's
+     * answer, giving up early - with null - once $budgetDeadline has passed.
+     * Null is impossible when $budgetDeadline is null.
+     *
+     * @return array<string, mixed>|null
+     *
+     * @throws RequestTimedOutException|ServerErrorException|ConnectionClosedException|MalformedMessageException
+     */
+    private function collect(PendingResponse $pending, ?float $budgetDeadline): ?array
+    {
         $id = $pending->id;
 
+        // Buffered answers are handed over even with the budget already
+        // spent: the work is done and the payload is in memory, so throwing
+        // it away would be a loss for nothing.
         while (!isset($this->arrived[$id])) {
             if (!isset($this->deadlines[$id])) {
                 // Not on the wire and not buffered: either already
                 // collected, or from a different client instance.
-                throw new \LogicException(sprintf('Nothing pending for request "%s" - already awaited?', $id));
+                throw new LogicException(sprintf('Nothing pending for request "%s" - already awaited?', $id));
             }
 
-            $this->readMore($id);
+            if ($budgetDeadline !== null && microtime(true) >= $budgetDeadline) {
+                return null;
+            }
+
+            $this->readMore($id, $budgetDeadline);
         }
 
         $response = $this->arrived[$id];
@@ -168,6 +193,77 @@ final class WorkerPoolClient
     }
 
     /**
+     * Collects whatever answers arrive within ONE budget shared by the whole
+     * group, and returns those - a fan-in that degrades instead of failing.
+     *
+     * The difference from all() is what a missing answer means. all() is
+     * "these belong together": one failure fails the call, because a partial
+     * result was not what the caller asked for. This is the other case - a
+     * page assembled from several sources, where a slow recommendations
+     * service should cost its block, not the page. So a handle that times
+     * out, is answered with an ERROR, or simply hasn't come back when the
+     * budget runs out is left out of the result, and the rest still come
+     * back.
+     *
+     * Why a group budget rather than the per-request timeout: those run from
+     * each send() independently, so three requests with a 5s timeout can
+     * keep a caller waiting 5s even though two answered in milliseconds -
+     * the slowest one sets the pace. Here the caller states the total it is
+     * willing to spend, which is the number an HTTP handler actually has.
+     *
+     * Results keep the position of their handle, so a caller can tell WHICH
+     * ones made it:
+     *
+     *     $answers = $client->allWithin(2.0, $orders, $profile, $recommended);
+     *     $page['orders'] = $answers[0] ?? null;      // present = answered
+     *     $page['profile'] = $answers[1] ?? null;
+     *
+     * Handles left uncollected are abandoned: their late answers are
+     * discarded when they turn up (readMore already drops anything not on
+     * the deadline list) rather than being buffered for a caller who has
+     * moved on. Awaiting one afterwards throws LogicException, the same as
+     * awaiting twice.
+     *
+     * A dead connection is NOT degraded away - ConnectionClosedException and
+     * MalformedMessageException propagate. Nothing still in flight can
+     * arrive over a socket that is gone, so reporting a partial result would
+     * be reporting a lie about why it is partial.
+     *
+     * @return array<int, array<string, mixed>> payloads by handle position;
+     *         missing positions did not answer in time or answered with an error
+     *
+     * @throws ConnectionClosedException|MalformedMessageException
+     */
+    public function allWithin(float $seconds, PendingResponse ...$pending): array
+    {
+        $budgetDeadline = microtime(true) + $seconds;
+        $payloads = [];
+
+        foreach ($pending as $position => $handle) {
+            try {
+                $payload = $this->collect($handle, $budgetDeadline);
+            } catch (RequestTimedOutException | ServerErrorException) {
+                // This source is out; the others are unaffected. Which is
+                // the whole point of the method - see the docblock.
+                continue;
+            }
+
+            if ($payload !== null) {
+                $payloads[$position] = $payload;
+            }
+        }
+
+        // Whatever is still on the wire is no longer ours to wait for.
+        // Dropping the deadline is what makes its late answer discardable
+        // instead of a buffered payload nobody will ever collect.
+        foreach ($pending as $handle) {
+            unset($this->deadlines[$handle->id], $this->arrived[$handle->id]);
+        }
+
+        return $payloads;
+    }
+
+    /**
      * Drops the connection and forgets anything still in flight on it. The
      * next send() opens a fresh one; awaiting a handle from before throws.
      */
@@ -184,9 +280,15 @@ final class WorkerPoolClient
      * remaining time for anything to arrive, then files each message under
      * its own id.
      *
+     * $notLaterThan caps that wait without changing what it means to run
+     * out: only the request's OWN deadline is a timeout. A group budget
+     * (see allWithin) merely stops the waiting, and the caller decides what
+     * an exhausted budget means - so this returns having read whatever
+     * turned up, rather than throwing.
+     *
      * @throws RequestTimedOutException|ConnectionClosedException|MalformedMessageException
      */
-    private function readMore(string $waitingFor): void
+    private function readMore(string $waitingFor, ?float $notLaterThan = null): void
     {
         $remaining = $this->deadlines[$waitingFor] - microtime(true);
 
@@ -196,6 +298,10 @@ final class WorkerPoolClient
             throw new RequestTimedOutException(
                 sprintf('No response for request "%s" within %.3fs', $waitingFor, $this->timeoutSeconds)
             );
+        }
+
+        if ($notLaterThan !== null) {
+            $remaining = max(0.0, min($remaining, $notLaterThan - microtime(true)));
         }
 
         try {
