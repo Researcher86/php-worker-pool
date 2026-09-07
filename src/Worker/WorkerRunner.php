@@ -39,6 +39,10 @@ final readonly class WorkerRunner
     public function __construct(
         private Socket $socket,
         ?\Closure $handler = null,
+        // Where this worker publishes what only it can measure about itself
+        // - null when the Master couldn't set up shared memory, or in tests
+        // that don't care (see SharedTelemetry).
+        private ?TelemetrySlot $slot = null,
     ) {
         // Default: echo the params back - a sane placeholder until an
         // application provides something real, and what the protocol-level
@@ -49,6 +53,11 @@ final readonly class WorkerRunner
 
     public function run(): void
     {
+        // A baseline before any work: until a worker has published once, the
+        // Master has no reading for it at all and its memory limit simply
+        // isn't enforced.
+        $this->publishVitals();
+
         while (true) {
             try {
                 $messages = $this->socket->read();
@@ -68,6 +77,11 @@ final readonly class WorkerRunner
                 }
 
                 $this->socket->write($this->handle($message));
+
+                // After the reply, not before: the response is out the door
+                // first, and the reading the Master gets is the one that
+                // matters for recycling - what this request LEFT allocated.
+                $this->publishVitals();
             }
         }
     }
@@ -113,6 +127,22 @@ final readonly class WorkerRunner
             $requestId,
             $response->payload,
         );
+    }
+
+    /**
+     * memory_get_usage(true) is the whole reason this exists: it reports what
+     * PHP has actually taken from the OS in THIS process, which no one
+     * outside it can ask for, and which is the quantity a memory recycling
+     * limit is about (see ShmWorkerMemory).
+     *
+     * microtime() rather than the Master's Clock abstraction on purpose -
+     * the timestamp is read by a different process, so it has to come from
+     * the one clock both of them genuinely share, not from something a test
+     * could have replaced on one side only.
+     */
+    private function publishVitals(): void
+    {
+        $this->slot?->publish(memory_get_usage(true), microtime(true));
     }
 
     public function close(): void

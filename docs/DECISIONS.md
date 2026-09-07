@@ -23,6 +23,7 @@ how a request flows through it today, see
 - [Execution timeout, and testing the signal races](#execution-timeout-and-testing-the-signal-races)
 - [Failure semantics and invariant tests](#failure-semantics-and-invariant-tests)
 - [Latency breakdown](#latency-breakdown)
+- [Worker telemetry over shared memory](#worker-telemetry-over-shared-memory)
 - [Socket permissions](#socket-permissions)
 - [Zombie processes after the test suite](#zombie-processes-after-the-test-suite)
 - [Where the code ended up, and why](#where-the-code-ended-up-and-why)
@@ -685,6 +686,13 @@ src/
 │   ├── WorkerLauncher.php
 │   ├── ForkedWorkerLauncher.php
 │   ├── Autoscaler.php
+│   ├── RecyclingPolicy.php
+│   ├── WorkerMemory.php        # what a worker's memory reading is
+│   ├── ShmWorkerMemory.php     #   ...as the worker itself reports it
+│   ├── ProcMemory.php          #   ...as /proc sees it from outside
+│   ├── SharedTelemetry.php     # the segment, its slots and their seqlock
+│   ├── TelemetrySlot.php       # one worker's write handle into it
+│   ├── WorkerVitals.php
 │   ├── PayloadHydrator.php
 │   └── PayloadHydrationException.php
 │
@@ -742,3 +750,92 @@ src/
 ```
 
 ---
+
+# Worker telemetry over shared memory
+
+Started as the opposite question: a plan to move the whole master↔worker
+channel onto System V message queues. That was rejected, and the reasoning is
+worth keeping because it is what shaped this feature. The two load-bearing
+objections were:
+
+- **A SysV queue has no file descriptor.** It cannot go into
+  `stream_select()`, so the Master would have had to poll for responses -
+  turning the one property the Dispatcher is built around ("dispatch is
+  triggered only by events, never by polling") into a 2ms spin that
+  degrades the client sockets too, not just the worker channel.
+- **MSGMAX is 8 KiB.** Against 1 MiB on the socket today, and raising it is
+  a privileged host-level sysctl. Compressing to fit would have made the
+  limit depend on how compressible a payload happened to be - a message size
+  cap that passes or fails on the entropy of the data.
+
+But one part of the idea was right: **not everything that crosses the
+process boundary is an event.** Requests and responses are - somebody is
+waiting for each one, and a socket the event loop can wait on is exactly the
+right shape. A worker's memory use is not: nobody waits for it, a late
+reading is superseded by the next one, a lost one costs nothing, and the
+Master already polls for it on a tick it runs anyway. That is state, and
+state wants a different channel.
+
+So the transport stayed a socket pair, and the *state* moved to shared
+memory (`ext-shmop`), where it costs no message, no fd, and nothing that
+ever has to wake anybody up.
+
+## What it fixed
+
+`ProcMemory` reads `/proc/<pid>/statm` - the only way for the Master to
+measure a worker from outside. Two problems, both real:
+
+1. **It is Linux-only.** On macOS, or a container without /proc, it returns
+   null and `maxMemoryBytes` is silently never enforced. A recycling limit
+   that quietly doesn't exist is worse than no limit at all, because the
+   configuration says otherwise.
+2. **It measures the wrong quantity.** statm reports RSS: pages still shared
+   with the Master after fork, the opcache, every mapping the process never
+   asked for. What the limit is *about* is PHP heap growing inside a
+   long-lived worker, which is `memory_get_usage(true)` - a number only that
+   worker can obtain, and now the one it publishes.
+
+## The design, and what each part is defending against
+
+- **Fixed-size slots, no allocator.** A worker writes at an offset derived
+  from its own index, so nothing it can do - including dying mid-write -
+  corrupts anything but its own slot.
+- **Seqlock.** One writer per slot means writes never race each other, but a
+  reader can still catch one half-applied, and a torn memory figure would
+  recycle a healthy worker. The writer brackets the body with an odd/even
+  counter; a reader that sees an odd value, or a different one afterwards,
+  discards the reading. Discarding is free - the next tick reads again.
+- **The Master reserves slots, never a worker.** One reserver means no lock,
+  and it happens before the fork so both processes inherit the same index
+  without anything being sent to the child.
+- **Every reading carries its author's pid.** Slots are reused once their
+  worker is gone (`posix_kill($pid, 0)`), so a stale reading must never be
+  attributed to whoever inherits the slot next. Reserve also zeroes it.
+- **`ftok()` over an anchor file, not a random key.** A segment is
+  kernel-persistent: a SIGKILLed Master leaves one behind. A random key would
+  make that orphan unfindable and therefore permanent, so the key is derived
+  from a small anchor file next to the socket, and startup removes whatever
+  it finds there before creating its own. The anchor is deleted only once the
+  segment really is gone - `ftok()` hashes the inode, so dropping it earlier
+  would hand the next Master a different key and strand the orphan for good.
+  Verified by hand: `kill -9` the Master, see the orphan in `ipcs -m`, start
+  a successor, see one segment with a new id.
+
+## What was deliberately left out
+
+A heartbeat, to tell a handler stuck in an infinite loop from one that is
+merely slow. It doesn't work: neither of them publishes anything while
+inside the handler, so the two look identical from the Master's side. Making
+it work would need the *handler* to check in - a cooperative ping, which
+changes the `Request in, Response out` contract that WorkerRunner exists to
+keep fixed. That is a decision about the application contract, not a
+telemetry detail, so it isn't smuggled in here. The execution timeout stays
+what it is: a timer from dispatch.
+
+## Cost
+
+Three small writes per request on the worker's hot path. Benchmarked at
+4 clients x 1500 requests, three runs each way: 17.5-18.7k req/s with
+telemetry against 15.8-18.0k without - the difference is smaller than the
+spread between runs, so the honest statement is that it isn't measurable
+here, not that it is free.

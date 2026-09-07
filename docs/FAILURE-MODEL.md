@@ -73,6 +73,7 @@ idempotency, and that choice belongs to the application.
 | **Client stops reading** | write buffer passes 4 MiB | connection declared broken and half-closed | Master's memory is bounded |
 | **Queue overruns** | bounded queue | new requests rejected with `server_overloaded` | callers get an immediate, actionable answer |
 | **fork() fails** | launch throws | logged; the pool keeps whatever workers it has | retried on the next sweep |
+| **Telemetry segment orphaned** | nothing at the time - a SIGKILLed Master never gets to remove it | one stale shared memory segment in `ipcs -m`; nothing running is affected | the next Master finds it through the same `ftok()` anchor and removes it before creating its own |
 | **Master crashes** | nothing | **everything in memory is lost** | see below |
 
 ---

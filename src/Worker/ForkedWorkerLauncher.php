@@ -23,6 +23,10 @@ final class ForkedWorkerLauncher implements WorkerLauncher
     /** @param \Closure(Request): Response|null $handler */
     public function __construct(
         private readonly ?\Closure $handler = null,
+        // Where forked workers publish their own vitals. Null runs the pool
+        // exactly as before, with the Master measuring workers from outside
+        // (see SharedTelemetry, ShmWorkerMemory).
+        private readonly ?SharedTelemetry $telemetry = null,
     ) {
     }
 
@@ -40,11 +44,22 @@ final class ForkedWorkerLauncher implements WorkerLauncher
     {
         $socketPair = new SocketPair();
 
+        // Reserved BEFORE the fork so both processes inherit the same slot
+        // index: the child couldn't be told one afterwards without a message,
+        // and the parent picking it is what keeps reservation single-writer
+        // and lock-free. Null when the segment is full or unavailable - the
+        // worker then simply runs untelemetered.
+        $slot = $this->telemetry?->reserve();
+
         $pid = pcntl_fork();
         if ($pid === -1) {
             // Throwing lets the caller (Master's try/finally) tear down the
             // pool and sockets instead of die()'ing from inside here, which
             // would skip that cleanup.
+            if ($slot !== null) {
+                $this->telemetry->release($slot);
+            }
+
             throw new \RuntimeException('fork failed');
         }
 
@@ -69,13 +84,17 @@ final class ForkedWorkerLauncher implements WorkerLauncher
 
             $socketPair->closeMaster();
 
-            $runner = new WorkerRunner($socketPair->getWorkerSocket(), $this->handler);
+            $runner = new WorkerRunner($socketPair->getWorkerSocket(), $this->handler, $slot);
             $runner->run();
 
             exit(0);
         }
 
         $socketPair->closeWorker();
+
+        if ($slot !== null) {
+            $this->telemetry->bind($slot, $pid);
+        }
 
         return new WorkerProcess($pid, $socketPair->getMasterSocket());
     }

@@ -161,6 +161,7 @@ three sharp edges, and the file is mostly those:
 | **Timeouts** | two of them: a request deadline that answers the client, and an execution limit that kills a handler which will never return |
 | **Crash recovery** | SIGCHLD, the dead worker's request failed, a replacement forked |
 | **Worker recycling** | replaced after N requests / an age / a memory ceiling - drained, never killed mid-request |
+| **Worker telemetry** | each worker publishes its own memory use into shared memory - a pull-only side channel, no messages, no fd |
 | **Graceful shutdown** | SIGTERM drains in-flight work within one budget, then force-stops |
 | **Graceful reload** | SIGHUP swaps the whole generation without dropping a connection |
 | **Autoscaling** | grows on queue pressure, shrinks when idle |
@@ -190,6 +191,7 @@ them worth returning to.
 | crashes, reload, recycling, scaling and shutdown share one owner | [`Worker/WorkerPool.php`](src/Worker/WorkerPool.php) |
 | a pool decides to grow or shrink | [`Worker/Autoscaler.php`](src/Worker/Autoscaler.php) |
 | a worker is replaced before it leaks, without dropping its request | [`Worker/RecyclingPolicy.php`](src/Worker/RecyclingPolicy.php) |
+| a worker reports what only it can measure about itself, lock-free | [`Worker/SharedTelemetry.php`](src/Worker/SharedTelemetry.php) |
 | signals are handled without doing the work inside the handler | [`Master/Master.php`](src/Master/Master.php) |
 | the socket is kept from being world-connectable | [`Server/UnixSocketServer.php`](src/Server/UnixSocketServer.php) |
 | a worker loop stays alive through a handler that throws | [`Worker/WorkerRunner.php`](src/Worker/WorkerRunner.php) |
@@ -479,6 +481,26 @@ Socket Pair
 ```text
 Master Socket ◄──────────────► Worker Socket
 ```
+
+Requests and responses are events: somebody is waiting for each one, so they
+travel over a socket the event loop can wait on. But not everything a
+process wants to know about another one is an event. A worker's memory use
+is *state* - nobody is waiting for it, a late reading is superseded by the
+next one, and a lost one costs nothing. Putting state on the request channel
+would mean steady traffic to deliver something nobody asked for.
+
+So there is a second channel, shaped for state rather than events:
+
+```text
+        requests / responses          ← events, over the socket pair
+Master ◄────────────────────────► Worker
+       ─────────────────────────
+        shared memory table           ← state, read whenever the Master likes
+```
+
+Each worker owns one fixed-size slot and writes its own numbers into it; the
+Master reads them on the tick it already runs. No message, no wakeup, and
+nothing new for the event loop to watch.
 
 ---
 

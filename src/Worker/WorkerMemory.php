@@ -5,20 +5,23 @@ declare(strict_types=1);
 namespace App\Worker;
 
 /**
- * Reads another process's resident set size - the Master can't call
- * memory_get_usage() on a worker, since that only ever reports the caller's
- * own heap.
+ * How much memory a worker is using, as the Master sees it - which it cannot
+ * simply ask for: memory_get_usage() only ever reports the heap of whoever
+ * calls it, and the Master is not the worker.
  *
- * Linux only, via /proc/<pid>/statm (field 2 is resident pages). Elsewhere -
- * macOS, or a hardened container without /proc - measure() returns null and
- * the memory limit simply isn't enforced; the request and lifetime limits,
- * which the Master counts itself, work everywhere.
+ * Two ways to answer that, and they measure different quantities:
+ * ShmWorkerMemory reads what the worker published about itself, ProcMemory
+ * reads its resident set from /proc. Either may say null - a reading the
+ * platform can't give, or a worker that hasn't reported one yet - and a
+ * memory limit that can't be measured is left unenforced rather than
+ * guessed at. The request and lifetime limits, which the Master counts
+ * itself, work everywhere regardless.
  *
  * An interface so a test can supply readings without needing a real process
  * that has actually allocated anything.
  */
 interface WorkerMemory
 {
-    /** Resident bytes for $pid, or null if unavailable on this platform. */
+    /** Bytes in use by $pid, or null if no trustworthy reading is available. */
     public function measure(int $pid): ?int;
 }

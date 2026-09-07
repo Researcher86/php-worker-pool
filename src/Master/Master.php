@@ -23,6 +23,8 @@ use App\Support\SystemClock;
 use App\Worker\Autoscaler;
 use App\Worker\ForkedWorkerLauncher;
 use App\Worker\RecyclingPolicy;
+use App\Worker\SharedTelemetry;
+use App\Worker\ShmWorkerMemory;
 use App\Worker\WorkerPool;
 
 final class Master
@@ -31,6 +33,15 @@ final class Master
     // all) to sweep for expired requests. Bounds how late a timeout can be
     // detected, not how precisely - see PendingRequestRegistry::removeExpired().
     private const float TIMEOUT_CHECK_INTERVAL_SECONDS = 1.0;
+
+    // Room for every worker plus the ones on their way out: a slot stays
+    // taken until its worker is really gone, so a pool churning at its
+    // ceiling (a reload, a burst of recycling) briefly needs more slots than
+    // it has workers. Capped so an absurd maxWorkers can't ask the kernel
+    // for an absurd segment - past the cap the extra workers just run
+    // untelemetered.
+    private const int TELEMETRY_SLOTS_PER_WORKER = 2;
+    private const int MAX_TELEMETRY_SLOTS = 1024;
 
     private bool $running = true;
 
@@ -114,14 +125,32 @@ final class Master
 
     public function run(): void
     {
-        $this->pool = new WorkerPool(
-            $this->minWorkers,
-            new ForkedWorkerLauncher($this->handler),
-            maxWorkers: $this->maxWorkers,
-            logger: $this->logger,
-            recycling: $this->recycling,
-            clock: $this->clock,
+        // Anchored next to the socket so a Master that was SIGKILLed leaves
+        // a segment its successor can find and remove.
+        $telemetry = SharedTelemetry::openAt(
+            $this->socketPath . '.telemetry',
+            min($this->maxWorkers * self::TELEMETRY_SLOTS_PER_WORKER, self::MAX_TELEMETRY_SLOTS),
         );
+
+        try {
+            $this->pool = new WorkerPool(
+                $this->minWorkers,
+                new ForkedWorkerLauncher($this->handler, $telemetry),
+                maxWorkers: $this->maxWorkers,
+                logger: $this->logger,
+                recycling: $this->recycling,
+                memory: new ShmWorkerMemory($telemetry),
+                clock: $this->clock,
+            );
+        } catch (\Throwable $e) {
+            // The pool failing to launch (a fork that didn't) is the one
+            // path out of run() that happens before the try/finally below
+            // exists - and a segment is kernel-persistent, so without this
+            // it would outlive the process that never even started.
+            $telemetry->destroy();
+
+            throw $e;
+        }
         $this->loop = new EventLoop();
         $this->pendingRequests = new PendingRequestRegistry($this->clock);
         $this->requestMetrics = new RequestMetrics();
@@ -184,6 +213,10 @@ final class Master
             // after gracefulShutdownTimeout), not 30s of draining plus a
             // separate window on top of it.
             $this->pool->stop(max(0.0, $remaining));
+
+            // After stop(): the workers are gone, so nothing is left to
+            // publish into a segment we're about to hand back to the kernel.
+            $telemetry->destroy();
 
             $this->loop->removeReadable($this->signalRead);
             fclose($this->signalRead);
