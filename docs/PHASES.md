@@ -290,7 +290,7 @@ One Master and one Worker can exchange messages successfully.
 - [tests/IPC/SocketTest.php](../tests/IPC/SocketTest.php) -
   `testWriteAndReadRoundTripsASimpleMessage` is this phase's PING/PONG
   exchange over a real `stream_socket_pair()`.
-- [tests/Worker/PersistentWorkerTest.php](../tests/Worker/PersistentWorkerTest.php) -
+- [tests/Worker/Runtime/PersistentWorkerTest.php](../tests/Worker/Runtime/PersistentWorkerTest.php) -
   the other half, with a real `pcntl_fork()`: Master writes, the forked
   child reads, answers, and the answer arrives back.
 
@@ -352,7 +352,7 @@ The same Worker can process at least 100 consecutive requests.
 
 ## Tests
 
-- [tests/Worker/PersistentWorkerTest.php](../tests/Worker/PersistentWorkerTest.php) -
+- [tests/Worker/Runtime/PersistentWorkerTest.php](../tests/Worker/Runtime/PersistentWorkerTest.php) -
   the whole file is this phase. `testWorkerProcessesMultipleConsecutiveRequests`
   is the Definition of Done (consecutive requests through one forked worker,
   no exit in between); `testHandlerFailureAnswersWithAnErrorAndTheWorkerSurvives`
@@ -1172,7 +1172,7 @@ $response = $client->call(
 * [x] Handle timeouts — RequestTimedOutException
 
 Note: WorkerRunner::handle() now routes on `action` via `match` - `calculate`
-does a real `a + b` (see Worker/WorkerRunner.php); anything else (or no
+does a real `a + b` (see Worker/Runtime/WorkerRunner.php); anything else (or no
 action at all) still falls back to echoing the payload back, which is what
 the rest of the test suite's plain-payload requests rely on.
 
@@ -1214,7 +1214,7 @@ configured timeout (see WorkerPoolClientTest).
   `testNoResponseThrowsRequestTimedOutException`.
 - [tests/E2E/MasterEndToEndTest.php](../tests/E2E/MasterEndToEndTest.php) -
   the same client against the real `bin/server.php`.
-- [tests/Worker/PayloadHydratorTest.php](../tests/Worker/PayloadHydratorTest.php)
+- [tests/Protocol/PayloadHydratorTest.php](../tests/Protocol/PayloadHydratorTest.php)
   and `PersistentWorkerTest::testPerActionDtoIsHydratedFromParamsAndABadPayloadIsRejected` -
   the typed `action`/`params` contract that grew out of this phase's example
   API later on; see [DECISIONS.md](DECISIONS.md).
@@ -1635,7 +1635,7 @@ against a worker that never reads the SHUTDOWN message, rather than hanging.
   `testStopKillsAWorkerThatNeverRespondsToShutdown`: the SIGKILL fallback
   fires instead of hanging (run against
   [StuckWorkerLauncher](../tests/Worker/StuckWorkerLauncher.php)).
-- [tests/Worker/PersistentWorkerTest.php](../tests/Worker/PersistentWorkerTest.php) -
+- [tests/Worker/Runtime/PersistentWorkerTest.php](../tests/Worker/Runtime/PersistentWorkerTest.php) -
   `testWorkerExitsCleanlyWhenMasterClosesConnectionWithoutShutdown`, the
   worker's own side of stopping.
 - [tests/Server/UnixSocketServerTest.php](../tests/Server/UnixSocketServerTest.php) -
