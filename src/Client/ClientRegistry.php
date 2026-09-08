@@ -17,10 +17,15 @@ use Closure;
  *
  * A client is removed the moment its connection can no longer be trusted -
  * either it disconnected (ConnectionClosedException) or it sent bytes that
- * don't parse as a message (MalformedMessageException, e.g. a framing
- * desync). Both are handled the same way: drop the client, don't crash the
- * Master (see PHASES.md Phase 10, "A disconnected client must not crash the
- * Master").
+ * don't parse as a message, or a frame the Master's protocol doesn't allow
+ * a client to send (MalformedMessageException, thrown by the decoder on a
+ * framing desync and by Master::handleClientRequest on a type no client may
+ * use). All of them are handled the same way: drop the client, don't crash
+ * the Master (see PHASES.md Phase 10, "A disconnected client must not crash
+ * the Master").
+ *
+ * The third way out is removeBroken(): a client we can no longer WRITE to,
+ * which the read side has no way of noticing on its own.
  */
 final class ClientRegistry
 {
@@ -76,6 +81,33 @@ final class ClientRegistry
     }
 
     /**
+     * Drops every client that can no longer be written to (ClientConnection
+     * ::isBroken() - its peer is gone, or it blew the write-buffer cap),
+     * returning how many were removed.
+     *
+     * Polled by Master once per tick rather than pushed from
+     * ClientConnection the moment it breaks, because breaking happens deep
+     * inside a write - which is itself often reached from this class's own
+     * read handler, mid-iteration over that client's decoded messages.
+     * Removing it from there would close the socket underneath the loop
+     * that is still reading from it; a sweep at a known-safe point in the
+     * tick costs one comparison per client and has no such window.
+     */
+    public function removeBroken(): int
+    {
+        $removed = 0;
+
+        foreach ($this->clients as $client) {
+            if ($client->isBroken()) {
+                $this->remove($client);
+                $removed++;
+            }
+        }
+
+        return $removed;
+    }
+
+    /**
      * Starts tracking a newly accepted client connection.
      *
      * @param resource $socket a client socket accepted from a server
@@ -90,6 +122,15 @@ final class ClientRegistry
         $this->loop->addReadable($client->getResource(), function () use ($client): void {
             try {
                 foreach ($client->readAvailable() as $message) {
+                    // A client that broke mid-batch (its own error frame
+                    // overflowed the write buffer, say) is already on its
+                    // way out - the sweep just hasn't run yet. Nothing it
+                    // sent in the same read is worth dispatching when its
+                    // answer can no longer be delivered.
+                    if ($client->isBroken()) {
+                        break;
+                    }
+
                     ($this->onRequest)($client, $message);
                 }
             } catch (ConnectionClosedException | MalformedMessageException) {

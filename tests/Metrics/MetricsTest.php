@@ -27,6 +27,7 @@ final class MetricsTest extends TestCase
             requestsFailed: 150,
             requestsTimeout: 50,
             requestsRejected: 0,
+            requestsPending: 50,
             queueWait: new DurationSummary(count: 3, averageMs: 0.50, maxMs: 2.25),
             execution: new DurationSummary(count: 3, averageMs: 4.00, maxMs: 9.75),
             endToEnd: new DurationSummary(count: 3, averageMs: 4.50, maxMs: 12.00),
@@ -41,7 +42,7 @@ final class MetricsTest extends TestCase
         );
         $this->assertStringContainsString("Queue:\n  Pending: 124", $formatted);
         $this->assertStringContainsString(
-            "Requests:\n  Total: 100000\n  Completed: 99800\n  Failed: 150\n  Timeout: 50",
+            "Requests:\n  Total: 100000\n  Completed: 99800\n  Failed: 150\n  Timeout: 50\n  Rejected: 0\n  In flight: 50",
             $formatted
         );
 
@@ -54,5 +55,38 @@ final class MetricsTest extends TestCase
             . "  Total:      avg 4.50  max 12.00",
             $formatted
         );
+    }
+
+    /**
+     * The five request counters are a partition of requestsTotal, not five
+     * numbers that merely happen to be smaller than it: 99800 + 150 + 50 +
+     * 0 + 50 is exactly the 100000 accepted. The numbers above are the
+     * plan's own example output, so this asserts the example itself adds up.
+     */
+    public function testTheRequestCountersAccountForEveryAcceptedRequest(): void
+    {
+        // 99800 answered + 150 failed + 50 timed out + 0 rejected + 0 still
+        // in flight = the 100000 that were accepted.
+        $metrics = new Metrics(
+            workersTotal: 8,
+            workersIdle: 3,
+            workersBusy: 5,
+            workersCrashedTotal: 0,
+            workersRecycledTotal: 12,
+            workersTerminatedTotal: 3,
+            workersDraining: 1,
+            queueSize: 124,
+            requestsTotal: 100_000,
+            requestsCompleted: 99_800,
+            requestsFailed: 150,
+            requestsTimeout: 50,
+            requestsRejected: 0,
+            requestsPending: 0,
+            queueWait: new DurationSummary(count: 3, averageMs: 0.50, maxMs: 2.25),
+            execution: new DurationSummary(count: 3, averageMs: 4.00, maxMs: 9.75),
+            endToEnd: new DurationSummary(count: 3, averageMs: 4.50, maxMs: 12.00),
+        );
+
+        $this->assertSame($metrics->requestsTotal, $metrics->requestsAccountedFor());
     }
 }

@@ -395,7 +395,7 @@ final class WorkerPool
             // The outgoing worker may already be gone (crashed and reaped
             // since the reload started) - its replacement is launched
             // either way, which is the point of the pass.
-            ($this->workers[$pid] ?? null)?->drain();
+            ($this->workers[$pid] ?? null)?->drain($this->clock->now());
         }
 
         $this->doRetireIdleWorkers();
@@ -459,7 +459,7 @@ final class WorkerPool
 
                 $this->register($replacement);
 
-                $worker->drain();
+                $worker->drain($this->clock->now());
                 $this->totalRecycled++;
                 $recycled++;
 
@@ -486,9 +486,23 @@ final class WorkerPool
      * request timeout: by the time it fires, the request is not late, it is
      * never finishing.
      *
-     * A drained worker is exempt: it is already leaving, and its request is
-     * finishing normally. There is no draining it here either - the whole
-     * point is that it will not finish on its own.
+     * A worker on its way out is NOT exempt, which it used to be. Draining
+     * never interrupts a request, so a drained worker still finishing one
+     * keeps the execution limit and nothing else - but "leaving" was
+     * otherwise unbounded in both of its own directions: a drained worker
+     * whose handler never returns, and a retired one (STOPPING, socket
+     * closed, SHUTDOWN sent) whose process simply never exits, were both
+     * skipped by every sweep there is. Either one holds its slot, its pid
+     * and its telemetry slot for as long as the Master lives, and nothing
+     * in the system would ever ask why. $departureLimitSeconds is that
+     * bound: told to leave, and still here.
+     *
+     * A leaving worker is stopped before it is signalled, so its exit is
+     * read as expected rather than as a crash - see the loop. Its in-flight
+     * request, if it somehow still had one, is abandoned without a
+     * synthesized error: by the time an execution limit set above the
+     * request timeout fires, whoever was waiting has already been answered
+     * request_timeout.
      *
      * SIGTERM first (workers run with default handlers, so it ends them
      * immediately), escalating to SIGKILL on a later sweep for anything that
@@ -498,24 +512,36 @@ final class WorkerPool
      *
      * @return int how many were signalled this pass
      */
-    public function terminateStuckWorkers(float $limitSeconds, ?float $bootstrapLimitSeconds = null): int
-    {
-        return $this->withSigchldDeferred(function () use ($limitSeconds, $bootstrapLimitSeconds): int {
+    public function terminateStuckWorkers(
+        float $limitSeconds,
+        ?float $bootstrapLimitSeconds = null,
+        ?float $departureLimitSeconds = null,
+    ): int {
+        return $this->withSigchldDeferred(function () use ($limitSeconds, $bootstrapLimitSeconds, $departureLimitSeconds): int {
             $now = $this->clock->now();
             $signalled = 0;
 
             foreach ($this->workers as $pid => $worker) {
-                if ($worker->isDraining()) {
-                    continue;
-                }
-
-                $reason = $this->stuckReason($worker, $now, $limitSeconds, $bootstrapLimitSeconds);
+                $reason = $this->stuckReason($worker, $now, $limitSeconds, $bootstrapLimitSeconds, $departureLimitSeconds);
 
                 if ($reason === null) {
                     continue;
                 }
 
                 $escalate = $worker->isTerminating();
+
+                // A worker that was already leaving goes to STOPPING before
+                // the signal, and that is what keeps this from overshooting:
+                // the reaper reads a STOPPING exit as expected - no crash
+                // counted, and no replacement, because whoever drained it
+                // launched one already. Its socket goes with it (a drained
+                // worker's is still open), so the Dispatcher stops watching
+                // a worker that is about to die.
+                if ($worker->isDraining()) {
+                    $worker->stop($now);
+                    $worker->close();
+                }
+
                 posix_kill($pid, $escalate ? SIGKILL : SIGTERM);
 
                 if (!$escalate) {
@@ -531,23 +557,63 @@ final class WorkerPool
     }
 
     /**
-     * The two ways a worker can occupy a slot without making progress, and
-     * why they share one sweep: both end identically (SIGTERM, SIGKILL on
-     * the next pass, reaped and replaced), and both mean "this one is not
-     * going to become useful on its own".
+     * The ways a worker can occupy a slot without making progress, and why
+     * they share one sweep: all of them end identically (SIGTERM, SIGKILL
+     * on the next pass, reaped) and all of them mean "this one is not going
+     * to become useful on its own".
      *
-     * What is stuck differs. An execution overrun is a REQUEST that will
-     * never finish - the client left long ago, the worker still holds it. A
-     * bootstrap overrun is the WORKER: forked, never said READY, and without
-     * this it would sit in STARTING forever, costing the pool one worker of
-     * capacity that nothing would ever notice missing.
+     * What is stuck differs, and so does the limit that judges it. An
+     * execution overrun is a REQUEST that will never finish - the client
+     * left long ago, the worker still holds it. A bootstrap overrun is the
+     * WORKER: forked, never said READY, and without this it would sit in
+     * STARTING forever, costing the pool one worker of capacity that
+     * nothing would ever notice missing. A departure overrun is a worker
+     * that was told to leave and did not - the one state whose exit nobody
+     * else is waiting on with a deadline.
      */
     private function stuckReason(
         WorkerProcess $worker,
         float $now,
         float $limitSeconds,
         ?float $bootstrapLimitSeconds,
+        ?float $departureLimitSeconds,
     ): ?string {
+        if ($worker->getState() === WorkerState::STOPPING) {
+            // Told to shut down and still here. Only the departure deadline
+            // can apply: stop() cleared any request, and the only thing
+            // left to wait for is the process exiting - which, with its
+            // socket already closed, normally takes milliseconds.
+            if ($worker->isTerminating()) {
+                // Signalled by an earlier sweep and still alive: keep
+                // reporting it so the SIGTERM -> SIGKILL escalation can
+                // finish, configured departure limit or not.
+                return 'was signalled to stop and has still not exited';
+            }
+
+            $leaving = $worker->getLeavingSeconds($now);
+
+            if ($departureLimitSeconds === null || $leaving === null || $leaving < $departureLimitSeconds) {
+                return null;
+            }
+
+            return sprintf(
+                'was told to shut down %.1fs ago and is still here (max %.1fs)',
+                $leaving,
+                $departureLimitSeconds,
+            );
+        }
+
+        if ($worker->isDraining() && !$worker->isWorking()) {
+            // Nothing to judge, deliberately. retireIdleWorkers() stops this
+            // worker within the same tick (WorkerPool runs it after every
+            // drain, Master once per tick), and the departure limit above
+            // takes over from STOPPING onwards - so a limit here would only
+            // ever fire on the honest case it must not touch: a worker that
+            // took longer than the departure limit to finish the request it
+            // was drained with, and has just now answered it.
+            return null;
+        }
+
         if ($worker->isStarting()) {
             $age = $worker->getAgeSeconds($now);
 
@@ -556,6 +622,10 @@ final class WorkerPool
                 : null;
         }
 
+        // Reached by a BUSY worker, and by a DRAINING one still finishing
+        // the request it was drained with - the same limit for both, which
+        // is the whole of "draining never interrupts a request": it gets
+        // exactly as long as it would have got had it never been drained.
         $working = $worker->getWorkingSeconds($now);
 
         if ($working === null || $working < $limitSeconds) {
@@ -609,7 +679,7 @@ final class WorkerPool
                 continue;
             }
 
-            $worker->stop();
+            $worker->stop($this->clock->now());
             $worker->write(new Message(MessageType::SHUTDOWN, 'retire-' . $pid));
             $worker->close();
             // Left in $this->workers on purpose: reapDeadWorkers() (SIGCHLD)
@@ -678,7 +748,7 @@ final class WorkerPool
                     continue; // busy, already draining, stopping or dead
                 }
 
-                $worker->drain();
+                $worker->drain($this->clock->now());
                 $marked++;
             }
 
@@ -722,7 +792,7 @@ final class WorkerPool
             }
 
             if ($worker->getState() !== WorkerState::STOPPING) {
-                $worker->stop();
+                $worker->stop($this->clock->now());
                 $worker->write(new Message(MessageType::SHUTDOWN, 'shutdown-' . $worker->getPid()));
                 $worker->close();
             }

@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace App\Tests\E2E;
 
 use App\Contract\Calculate\CalculateRequest;
+use App\IPC\Socket;
+use App\Protocol\Message;
+use App\Protocol\MessageType;
 use App\Protocol\Request;
 use App\Sdk\ConnectionFailedException;
 use App\Sdk\PendingResponse;
@@ -24,11 +27,16 @@ use PHPUnit\Framework\TestCase;
  *   4. a DRAINING worker never receives new work  (unit: WorkerPoolTest)
  *   5. worker replacement never exceeds maxWorkers
  *   6. after shutdown: no workers, no socket file
+ *   7. nothing a client sends can end a worker
+ *   8. every accepted request is accounted for in the metrics
  */
 final class InvariantsTest extends TestCase
 {
     /** @var resource|null */
     private mixed $process = null;
+
+    /** @var array<int, resource> the Master's stdout/stderr - stdout is where its SIGUSR1 metrics dump lands */
+    private array $pipes = [];
 
     private string $socketPath = '';
 
@@ -73,6 +81,13 @@ final class InvariantsTest extends TestCase
 
         $this->assertIsResource($process);
         $this->process = $process;
+        $this->pipes = $pipes;
+
+        // Non-blocking, because the metrics dump is read by polling: a
+        // blocking read on a Master that hasn't answered SIGUSR1 yet would
+        // hang the test instead of failing it.
+        stream_set_blocking($pipes[1], false);
+        stream_set_blocking($pipes[2], false);
 
         $client = new WorkerPoolClient($this->socketPath, timeoutSeconds: 15.0);
         $deadline = microtime(true) + 10.0;
@@ -252,6 +267,186 @@ final class InvariantsTest extends TestCase
         }
 
         $this->assertNotSame([], $this->workerPids(), 'workers must not have been lost to vanishing clients');
+    }
+
+    /**
+     * Invariant 7: a client cannot end a worker. Both ends of the pool speak
+     * one wire format, so a client's frame type used to be forwarded to a
+     * worker verbatim - and a SHUTDOWN frame made the worker that received
+     * it exit exactly as if the Master had retired it. One frame per worker,
+     * a reap and a fork each time, from a peer whose only privilege is
+     * being able to ask for work.
+     */
+    public function testAClientCannotShutDownAWorkerWithItsOwnFrames(): void
+    {
+        $client = $this->startServer();
+        $before = $this->workerPids();
+        $this->assertNotSame([], $before);
+
+        // Raw connection rather than the SDK: the SDK only ever sends
+        // REQUEST, and the point here is a frame it would never produce.
+        $raw = stream_socket_client('unix://' . $this->socketPath, $errno, $error, 5.0);
+        $this->assertIsResource($raw, (string) $error);
+
+        $rawSocket = new Socket($raw);
+        $rawSocket->write(new Message(MessageType::SHUTDOWN, 'kill-a-worker'));
+
+        // Long enough for the frame to be read, dispatched (if it were
+        // going to be) and for a worker's death to be reaped and replaced.
+        usleep(500_000);
+
+        $this->assertSame($before, $this->workerPids(), 'no worker may die because a client asked it to');
+
+        // And the offender is dropped, the same way a malformed frame is:
+        // a peer that isn't speaking the protocol it claims to has nothing
+        // left to say that can be trusted.
+        $this->assertSame(
+            '',
+            (string) fread($raw, 1024),
+            'a protocol violation must cost the connection'
+        );
+        $this->assertTrue(feof($raw), 'the Master must have closed it');
+        fclose($raw);
+
+        // Everyone else is entirely unaffected.
+        $this->assertSame(
+            ['result' => 30],
+            $client->call(new Request('calculate', new CalculateRequest(10, 20)))
+        );
+    }
+
+    /**
+     * Invariant 8: every request the Master accepted is in exactly one
+     * bucket - answered, failed, timed out, rejected, or still in flight -
+     * so the five counters must add up to requestsTotal in the real
+     * Master's own snapshot, not just in a unit test's arithmetic
+     * (MetricsCollectorTest covers that half).
+     *
+     * They are counted in three components that have no view of each other
+     * (RequestMetrics, PendingRequestRegistry, RequestQueue), which is
+     * exactly why a request can quietly fall out of all of them: whichever
+     * of Master's paths forgets to record one, this is where it shows.
+     * Driven through a mix of outcomes on purpose - plain answers, a worker
+     * killed mid-flight, clients that vanish - since a partition of only
+     * successes proves nothing.
+     */
+    public function testTheMetricsAccountForEveryRequestTheMasterAccepted(): void
+    {
+        $client = $this->startServer();
+
+        // Answered.
+        for ($i = 0; $i < 20; $i++) {
+            $client->call(new Request('calculate', new CalculateRequest($i, $i)));
+        }
+
+        // Failed: an action the handler rejects, which comes back as an
+        // ERROR frame - the deterministic half of the failure mix.
+        for ($i = 0; $i < 5; $i++) {
+            try {
+                $client->call(new Request('no-such-action', new CalculateRequest($i, $i)));
+                $this->fail('an unknown action must not be answered as a success');
+            } catch (ServerErrorException $e) {
+                $this->assertSame('unknown_action', $e->error);
+            }
+        }
+
+        // Failed the harder way: a burst in flight, then every worker killed
+        // under it. Whether any request is still unanswered when the signal
+        // lands is a race, and deliberately not asserted - either outcome is
+        // a bucket, which is the whole point.
+        $inFlight = [];
+        for ($i = 0; $i < 10; $i++) {
+            $inFlight[] = $client->send(new Request('calculate', new CalculateRequest($i, 1)));
+        }
+
+        foreach ($this->workerPids() as $pid) {
+            posix_kill($pid, SIGKILL);
+        }
+
+        foreach ($inFlight as $handle) {
+            try {
+                $handle->await();
+            } catch (ServerErrorException) {
+                // worker_crashed is one of the outcomes being counted.
+            }
+        }
+
+        // Clients that disconnect mid-request - same again: whatever the
+        // race decides, the request must land in exactly one bucket.
+        for ($i = 0; $i < 10; $i++) {
+            $rude = new WorkerPoolClient($this->socketPath, timeoutSeconds: 5.0);
+            $rude->send(new Request('calculate', new CalculateRequest($i, $i)));
+            $rude->close();
+        }
+
+        // And a couple left genuinely in flight while the snapshot is taken.
+        $client->send(new Request('calculate', new CalculateRequest(1, 1)));
+        $client->send(new Request('calculate', new CalculateRequest(2, 2)));
+
+        $metrics = $this->dumpMetrics();
+
+        $accountedFor = $metrics['Completed']
+            + $metrics['Failed']
+            + $metrics['Timeout']
+            + $metrics['Rejected']
+            + $metrics['In flight'];
+
+        $this->assertGreaterThan(0, $metrics['Total'], 'the workload must actually have reached the Master');
+        $this->assertGreaterThan(0, $metrics['Failed'], 'the failure half of the mix must have happened');
+        $this->assertSame(
+            $metrics['Total'],
+            $accountedFor,
+            sprintf('requests unaccounted for in %s', json_encode($metrics))
+        );
+    }
+
+    /**
+     * Asks the real Master for its metrics the way an operator would - SIGUSR1
+     * - and parses the block it prints. Reading the numbers back out of
+     * format() rather than from an API also means the dump an operator
+     * actually looks at is what gets asserted.
+     *
+     * @return array<string, int>
+     */
+    private function dumpMetrics(): array
+    {
+        posix_kill($this->masterPid(), SIGUSR1);
+
+        $output = '';
+        $deadline = microtime(true) + 10.0;
+
+        while (microtime(true) < $deadline) {
+            $output .= (string) fread($this->pipes[1], 65536);
+
+            if (preg_match('/In flight: (\d+)/', $output) === 1) {
+                break;
+            }
+
+            usleep(50_000);
+        }
+
+        // The Requests block only: "Total" appears under Workers too, and
+        // reading the pool's size as the request count is exactly the kind
+        // of wrong number this test exists to catch.
+        $this->assertSame(
+            1,
+            preg_match('/Requests:\n(.+?)\n\n/s', $output, $block),
+            sprintf('the metrics dump should carry a Requests block, got: %s', $output)
+        );
+
+        $metrics = [];
+
+        foreach (['Total', 'Completed', 'Failed', 'Timeout', 'Rejected', 'In flight'] as $label) {
+            $this->assertSame(
+                1,
+                preg_match('/^  ' . preg_quote($label, '/') . ': (\d+)$/m', $block[1], $matches),
+                sprintf('the Requests block should report "%s", got: %s', $label, $block[1])
+            );
+
+            $metrics[$label] = (int) $matches[1];
+        }
+
+        return $metrics;
     }
 
     /**

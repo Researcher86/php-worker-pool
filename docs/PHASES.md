@@ -1728,6 +1728,16 @@ worker_processing_time) and queue_wait_time, all three needing timestamps
 nothing tracked yet. Added later, once a review made the operational case
 concrete - a p99 of 10s means something entirely different depending on
 whether it was spent queued or executing, and one number cannot say which.
+
+Added beyond the list above: requests_pending ("In flight" in the dump),
+plus workers_draining/recycled/terminated. The first is not decoration - the
+four request outcomes this phase lists are counted in three components with
+no view of each other, and without the in-flight count their sum cannot be
+compared to requests_total at all. With it, Metrics::requestsAccountedFor()
+states the identity once (answered + failed + timed out + rejected + in
+flight = accepted) and two tests hold the accounting to it: arithmetic over
+each of Master's five paths in MetricsCollectorTest, and a real Master's own
+SIGUSR1 dump under a mixed workload in InvariantsTest.
 See "Latency Breakdown" below.
 
 Verified live: 3 real requests through a running server, then SIGUSR1 -

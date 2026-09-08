@@ -12,6 +12,7 @@ use App\Dispatcher\Dispatcher;
 use App\EventLoop\EventLoop;
 use App\Metrics\MetricsCollector;
 use App\Metrics\RequestMetrics;
+use App\Protocol\MalformedMessageException;
 use App\Protocol\Message;
 use App\Protocol\MessageType;
 use App\Queue\RequestQueue;
@@ -136,6 +137,14 @@ final class Master
         // permanently, and silently - nothing else in the system would ever
         // ask why that worker never did anything.
         private readonly float $workerBootstrapTimeoutSeconds = 30.0,
+        // How long a worker gets between being told to leave and actually
+        // being gone. Not the request it may still be finishing - that is
+        // the execution timeout above, and a drained worker keeps it in
+        // full - but the departure itself: SHUTDOWN sent, socket closed,
+        // and the process still running. Small on purpose, because by then
+        // there is nothing left for it to do; without it, a worker that
+        // ignores its own shutdown holds its slot until the Master exits.
+        private readonly float $workerDepartureTimeoutSeconds = 10.0,
     ) {
     }
 
@@ -209,9 +218,17 @@ final class Master
                 $this->loop->tick(self::TIMEOUT_CHECK_INTERVAL_SECONDS);
 
                 $this->sendTimeouts();
+
+                // Before the pool sweeps, and deliberately: dropping a
+                // client we can no longer answer releases its pending
+                // requests, which is capacity the sweeps below get to see
+                // in the same tick rather than the next one.
+                $this->clients->removeBroken();
+
                 $this->pool->terminateStuckWorkers(
                     $this->workerExecutionTimeoutSeconds,
                     $this->workerBootstrapTimeoutSeconds,
+                    $this->workerDepartureTimeoutSeconds,
                 );
                 $this->pool->recycleExhaustedWorkers();
                 $this->pool->retireIdleWorkers();
@@ -364,9 +381,38 @@ final class Master
      * PendingRequestRegistry) rather than the client's own, so two clients
      * (or one client, by mistake) picking the same id can never misroute a
      * response.
+     *
+     * The TYPE is the Master's to decide too, and for the same reason. Both
+     * sides of the pool speak one wire format, so a client's frame type used
+     * to be forwarded verbatim - and a client that sent SHUTDOWN had it
+     * delivered to a worker, which exited exactly as if the Master had
+     * retired it. That turned "can reach the socket" into "can churn the
+     * pool": one frame per worker, a crash and a fork each time, from a peer
+     * that is only supposed to be able to ask for work.
+     *
+     * A frame of any other type is therefore a protocol violation rather
+     * than a request, and is treated exactly like a malformed one -
+     * ClientRegistry drops the connection - because a peer that isn't
+     * speaking the protocol it claims to has nothing left to say that can
+     * be trusted.
+     *
+     * The guard is the single place that decides this, which is why the
+     * dispatch below still passes $request->type through rather than
+     * restating REQUEST: the day a client is allowed to send some second
+     * type, this condition is the one thing that has to loosen.
+     *
+     * @throws MalformedMessageException
      */
     private function handleClientRequest(ClientConnection $client, Message $request): void
     {
+        if ($request->type !== MessageType::REQUEST) {
+            throw new MalformedMessageException(sprintf(
+                'Clients may only send "%s" frames, got "%s"',
+                MessageType::REQUEST->value,
+                $request->type->value,
+            ));
+        }
+
         $this->requestMetrics->recordReceived();
 
         $dispatchId = $this->pendingRequests->register($client, $request->id, $this->requestTimeoutSeconds);
@@ -481,6 +527,11 @@ final class Master
 
             $this->dispatcher->dispatchQueued(); // "finish QUEUED requests" too, not just in-flight ones
             $this->sendTimeouts();
+
+            // A client that can no longer be written to would otherwise
+            // keep its pending entries here for the whole drain window,
+            // holding shutdown open to deliver answers it cannot receive.
+            $this->clients->removeBroken();
         }
 
         // Whatever's left didn't finish inside the safety timeout - tell

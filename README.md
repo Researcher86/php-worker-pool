@@ -917,8 +917,33 @@ left to serve with.
 The two limits are separate numbers on purpose, and the execution limit sits
 above the request timeout: by the time it fires, the client left long ago
 and the question is no longer "is this late?" but "is this ever coming
-back?". A draining worker is exempt - it is already leaving, and its last
-request is finishing normally.
+back?". A draining worker is not exempt: it keeps its full budget - draining
+never interrupts a request - but not more than that, because "it will leave
+on its own" is exactly the claim a request past its limit has disproved.
+
+## Departure timeout - about leaving
+
+The worker is not working at all, it is just not going.
+
+```text
+Told to leave: 10:00:00     (drain, or SHUTDOWN + closed socket)
+Limit:         10 seconds   (workerDepartureTimeoutSeconds)
+                │
+                ▼
+   moved to STOPPING, then SIGTERM ──▶ (still alive?) ──▶ SIGKILL
+                │
+                ▼
+   SIGCHLD ──▶ reaped, and NOT replaced
+```
+
+Retirement was the one exit with no deadline on it: `retireIdleWorkers()`
+sends SHUTDOWN, closes the socket, and waits for a SIGCHLD that a worker
+ignoring both would never send. That worker held its slot, its pid and its
+telemetry slot for as long as the Master lived.
+
+No replacement is forked, and that is not an oversight: whoever drained it
+(a reload, a scale-down, recycling) already launched one, so treating this
+exit as a crash would put the pool one worker over its ceiling.
 
 ---
 

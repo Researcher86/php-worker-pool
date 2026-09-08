@@ -179,6 +179,97 @@ final class ClientRegistryTest extends TestCase
     }
 
     /**
+     * A client can also become undeliverable without ever disconnecting:
+     * it stops reading, its unsent responses pass ClientConnection's
+     * write-buffer cap, and the connection is given up on. Until this
+     * sweep existed, nothing removed it - it kept its read handler and
+     * went on submitting requests that took workers and queue slots to
+     * produce answers that could never be delivered, for as long as it
+     * cared to keep sending.
+     */
+    public function testAClientThatCanNoLongerBeWrittenToIsSweptOutOfTheRegistry(): void
+    {
+        $loop = new EventLoop();
+        $seen = null;
+        $disconnected = null;
+
+        $registry = new ClientRegistry(
+            $loop,
+            function (ClientConnection $client) use (&$seen): void {
+                $seen = $client;
+            },
+            function (ClientConnection $client) use (&$disconnected): void {
+                $disconnected = $client;
+            }
+        );
+
+        [$serverEnd, $clientEnd] = $this->pair();
+        stream_set_blocking($serverEnd, false);
+        $registry->accept($serverEnd);
+
+        // One request, purely to get hold of the registry's own
+        // ClientConnection for this peer.
+        (new Socket($clientEnd))->write(new Message(MessageType::REQUEST, 'req-1'));
+        $loop->tick();
+        $this->assertInstanceOf(ClientConnection::class, $seen);
+
+        // A response far past the 4 MB cap, with a peer that never reads it.
+        $seen->write(new Message(MessageType::RESPONSE, 'req-1', ['blob' => str_repeat('x', 5 * 1024 * 1024)]));
+        $this->assertTrue($seen->isBroken());
+
+        $this->assertSame(1, $registry->removeBroken());
+        $this->assertSame(0, $registry->count());
+        $this->assertFalse($loop->hasReadable(), 'its read handler must go with it');
+        $this->assertSame($seen, $disconnected, 'onDisconnect is what releases its pending requests');
+
+        // Idempotent: nothing left to sweep on the next tick.
+        $this->assertSame(0, $registry->removeBroken());
+
+        fclose($clientEnd);
+    }
+
+    /**
+     * The same client, within the single read that broke it. removeBroken()
+     * runs once per Master tick, so the rest of a batch decoded in the same
+     * read would otherwise still be dispatched - work taken on for a client
+     * that can no longer be answered.
+     */
+    public function testTheRestOfABatchIsDroppedOnceTheClientBreaksMidRead(): void
+    {
+        $loop = new EventLoop();
+        $handled = [];
+
+        $registry = new ClientRegistry(
+            $loop,
+            function (ClientConnection $client, Message $request) use (&$handled): void {
+                $handled[] = $request->id;
+
+                // Stands in for what the Master does with a request: write
+                // something back. This one is over the cap, so the client
+                // breaks while its own batch is still being iterated.
+                if ($request->id === 'req-1') {
+                    $client->write(new Message(MessageType::RESPONSE, $request->id, ['blob' => str_repeat('x', 5 * 1024 * 1024)]));
+                }
+            }
+        );
+
+        [$serverEnd, $clientEnd] = $this->pair();
+        stream_set_blocking($serverEnd, false);
+        $registry->accept($serverEnd);
+
+        $clientSocket = new Socket($clientEnd);
+        $clientSocket->write(new Message(MessageType::REQUEST, 'req-1'));
+        $clientSocket->write(new Message(MessageType::REQUEST, 'req-2'));
+        $clientSocket->write(new Message(MessageType::REQUEST, 'req-3'));
+
+        $loop->tick();
+
+        $this->assertSame(['req-1'], $handled, 'nothing after the break may be taken on');
+
+        fclose($clientEnd);
+    }
+
+    /**
      * PHASES.md Phase 18's Definition of Done: one connection can have
      * multiple pending requests at once. This isn't new machinery - the
      * handler already reads and decodes everything readAvailable() returns

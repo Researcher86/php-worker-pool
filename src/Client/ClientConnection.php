@@ -47,8 +47,8 @@ final class ClientConnection
 
     // Set when this connection can no longer be written to correctly (peer
     // gone, or buffer cap exceeded). One-way: all further writes are
-    // dropped. The read side is what ultimately removes the client from
-    // ClientRegistry - this flag just stops us wasting effort until then.
+    // dropped, and ClientRegistry drops the connection itself on its next
+    // sweep (see isBroken()).
     private bool $broken = false;
 
     public function __construct(
@@ -108,6 +108,23 @@ final class ClientConnection
         }
 
         $this->flush();
+    }
+
+    /**
+     * Whether this connection has been given up on - the peer is gone, or it
+     * blew through the write-buffer cap - so nothing more can be delivered
+     * to it.
+     *
+     * ClientRegistry polls this and removes the client, which is the part
+     * that used to be missing: a client past the cap kept its read handler,
+     * so it could go on submitting requests that occupied workers and queue
+     * slots to produce responses nobody could receive, for as long as it
+     * cared to. Being unable to answer a client is exactly the point at
+     * which its requests stop being worth running.
+     */
+    public function isBroken(): bool
+    {
+        return $this->broken;
     }
 
     /** Whether any queued bytes are still waiting to be sent (see Master's shutdown drain). */

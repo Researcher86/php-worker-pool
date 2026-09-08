@@ -13,7 +13,10 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: '8.5'
-          extensions: pcntl, posix
+          # shmop too: composer.json requires it (worker telemetry lives in
+          # a shared-memory segment), and without it `composer install`
+          # refuses the platform outright.
+          extensions: pcntl, posix, shmop
           coverage: none
 
       - run: composer install --no-interaction --no-progress

@@ -131,6 +131,11 @@ final class WorkerProcess
     // What separates "this worker is busy" from "this worker is stuck".
     private ?float $requestStartedAt = null;
 
+    // When this worker was first told to leave (drain or stop), per the
+    // pool's clock. What separates "this worker is on its way out" from
+    // "this worker is not going".
+    private ?float $leavingSince = null;
+
     public function __construct(
         private readonly int $pid,
         private readonly Socket $socket,
@@ -169,6 +174,22 @@ final class WorkerProcess
     public function getAgeSeconds(float $now): float
     {
         return $now - ($this->startedAt ?? $now);
+    }
+
+    /**
+     * How long this worker has been on its way out, or null if it isn't
+     * (or was drained/stopped without a timestamp, which only happens in
+     * tests driving WorkerProcess directly) - null reads as "never
+     * overstayed", the same safe-way-to-be-wrong getAgeSeconds() takes.
+     *
+     * Stamped once, on the FIRST drain() or stop(): a worker that drains
+     * and is then stopped is one departure, and restarting the clock at
+     * each step would let a worker that keeps being nudged along never look
+     * overdue.
+     */
+    public function getLeavingSeconds(float $now): ?float
+    {
+        return $this->leavingSince === null ? null : $now - $this->leavingSince;
     }
 
     public function getPid(): int
@@ -276,10 +297,17 @@ final class WorkerProcess
      *
      * Idempotent, and a no-op once the worker is already on its way out -
      * draining something that is STOPPING or DEAD would be a step backwards.
+     *
+     * $now (the pool's clock, as everywhere else here) starts the departure
+     * clock WorkerPool::terminateStuckWorkers() judges an overdue drain by.
      */
-    public function drain(): void
+    public function drain(?float $now = null): void
     {
         $this->apply('drain');
+
+        if ($now !== null) {
+            $this->leavingSince ??= $now;
+        }
     }
 
     public function isDraining(): bool
@@ -291,10 +319,17 @@ final class WorkerProcess
      * Requests shutdown. Legal from any state but DEAD — including BUSY,
      * since the pool must always be able to stop even if a request never
      * finished — abandoning any in-flight request.
+     *
+     * $now, as in drain(): a worker stopped without ever being drained is
+     * still a worker whose departure has a deadline.
      */
-    public function stop(): void
+    public function stop(?float $now = null): void
     {
         $this->apply('stop');
+
+        if ($now !== null) {
+            $this->leavingSince ??= $now;
+        }
 
         $this->currentRequestId = null;
         $this->requestStartedAt = null;

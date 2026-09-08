@@ -8,6 +8,7 @@ use App\Protocol\Message;
 use App\Protocol\MessageType;
 use App\Tests\Support\FakeClock;
 use App\Worker\WorkerPool;
+use App\Worker\WorkerState;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -68,22 +69,62 @@ final class ExecutionTimeoutTest extends TestCase
     }
 
     /**
-     * A drained worker is finishing its last request on purpose and will
-     * leave on its own - killing it would turn an orderly retirement into a
-     * lost request for no reason.
+     * Draining never interrupts a request, and this is what that means
+     * precisely: a drained worker keeps its FULL execution budget, exactly
+     * as if it had never been drained. It is retiring on purpose and will
+     * leave on its own the moment it answers.
      */
-    public function testADrainingWorkerIsExemptEvenPastTheLimit(): void
+    public function testADrainingWorkerKeepsItsWholeExecutionBudget(): void
     {
         $clock = new FakeClock(1_000.0);
         $pool = new WorkerPool(2, new FakeWorkerLauncher(), maxWorkers: 4, clock: $clock);
 
         $busyId = $pool->getAvailable();
-        $pool->write($busyId, new Message(MessageType::REQUEST, 'req-1'));
+        $worker = $pool->write($busyId, new Message(MessageType::REQUEST, 'req-1'));
 
         $pool->reload(); // drains the current generation, busy worker included
 
-        $clock->advance(120.0);
+        $clock->advance(59.0);
 
+        $this->assertSame(0, $pool->terminateStuckWorkers(60.0));
+        $this->assertTrue($worker->isDraining(), 'a drained worker within the limit is left alone entirely');
+
+        $pool->stop();
+    }
+
+    /**
+     * Past the limit, though, the exemption stops making sense: "it will
+     * leave on its own" is exactly the claim a request 61s into a 60s limit
+     * has disproved. This used to be exempt unconditionally, which made a
+     * drained worker with a hung handler the one thing in the pool nothing
+     * could ever end - it held its slot, its pid and its telemetry slot for
+     * as long as the Master lived.
+     *
+     * It is STOPPED rather than crashed, and that distinction is the point:
+     * whoever drained it already launched its replacement, so an exit read
+     * as a crash would fork a second one and leave the pool one worker over
+     * its intended size.
+     */
+    public function testADrainingWorkerPastTheLimitIsStoppedRatherThanLeftForever(): void
+    {
+        $clock = new FakeClock(1_000.0);
+        $pool = new WorkerPool(2, new FakeWorkerLauncher(), maxWorkers: 4, clock: $clock);
+
+        $busyId = $pool->getAvailable();
+        $worker = $pool->write($busyId, new Message(MessageType::REQUEST, 'req-1'));
+
+        $pool->reload();
+        $countAfterReload = $pool->count();
+
+        $clock->advance(61.0);
+
+        $this->assertSame(1, $pool->terminateStuckWorkers(60.0));
+        $this->assertSame(WorkerState::STOPPING, $worker->getState(), 'a worker already leaving must exit as expected, not as a crash');
+        $this->assertTrue($worker->isTerminating());
+        $this->assertSame($countAfterReload, $pool->count(), 'signalling it must not launch anything new');
+
+        // Second sweep escalates instead of counting it again - SIGKILL for
+        // a worker that ignored the SIGTERM.
         $this->assertSame(0, $pool->terminateStuckWorkers(60.0));
 
         $pool->stop();

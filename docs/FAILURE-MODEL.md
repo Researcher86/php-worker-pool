@@ -153,6 +153,12 @@ already broken, and it is bounded so that "broken" cannot mean "forever".
 Moving worker writes onto the same buffered path as clients is the obvious
 next step if that bound ever proves too generous.
 
+On the client side, hitting the 4 MiB cap ends the connection rather than
+merely silencing it. The buffer is dropped, the sending side is half-closed,
+and the client is removed from `ClientRegistry` on the Master's next tick -
+because a client whose answers cannot be delivered must not go on taking
+workers and queue slots to produce them.
+
 ---
 
 ## Who may connect
@@ -185,6 +191,21 @@ A permission that cannot be applied is fatal at startup rather than logged:
 a security setting that silently does not take effect is worse than one that
 was never offered.
 
+### What a connected peer may say
+
+Being able to connect buys the right to submit work, and nothing else. A
+client may send `REQUEST` frames only; any other type is a protocol
+violation and costs the connection, exactly as unparseable JSON does.
+
+This is not decoration. Both ends of the pool speak one wire format, and the
+Master used to forward the client's frame type into the pool verbatim - so a
+client that sent `type: "shutdown"` had it delivered to a worker, which
+exited exactly as if the Master had retired it. Every account that could
+reach the socket could therefore churn the pool a worker at a time, which on
+the `0660` shape above is every account in the group. The type is now the
+Master's to assign, for the same reason the correlation id already was:
+[why](DECISIONS.md#four-holes-a-review-found-at-the-edges).
+
 ---
 
 ## Protocol versioning: none
@@ -213,6 +234,9 @@ These hold, and are enforced by tests (`tests/E2E/InvariantsTest.php`):
 5. Worker replacement never pushes the pool past `maxWorkers`.
 6. After shutdown: no worker outlives the Master, and the socket file is
    removed.
+7. Nothing a client sends can end a worker.
+8. Every accepted request is accounted for: answered + failed + timed out +
+   rejected + in flight equals accepted, in every metrics snapshot.
 
 Invariant 2 is the one worth restating precisely, because the word
 "outcome" is doing real work: it means the *caller is told something*. It
