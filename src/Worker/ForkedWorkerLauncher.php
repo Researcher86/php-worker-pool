@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace App\Worker;
+namespace PhpWorkerPool\Worker;
 
-use App\IPC\SocketPair;
-use App\Protocol\Request;
-use App\Protocol\Response;
-use App\Support\Logger;
-use App\Support\NullLogger;
-use App\Worker\Runtime\WorkerRunner;
-use App\Worker\Telemetry\SharedTelemetry;
+use PhpWorkerPool\IPC\SocketPair;
+use PhpWorkerPool\Protocol\Request;
+use PhpWorkerPool\Protocol\Response;
+use PhpWorkerPool\Support\Logger;
+use PhpWorkerPool\Support\NullLogger;
+use PhpWorkerPool\Worker\Runtime\WorkerRunner;
+use PhpWorkerPool\Worker\Telemetry\SharedTelemetry;
 use Closure;
 use RuntimeException;
 

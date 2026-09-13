@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace App\Worker;
+namespace PhpWorkerPool\Worker;
 
-use App\Queue\RequestQueue;
-use App\Support\Clock;
-use App\Support\SystemClock;
+use PhpWorkerPool\Queue\RequestQueue;
+use PhpWorkerPool\Support\Clock;
+use PhpWorkerPool\Support\SystemClock;
 
 /**
  * PHASES.md Phase 20: grows the pool when the queue has work waiting and no

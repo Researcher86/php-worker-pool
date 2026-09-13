@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\Queue;
+namespace PhpWorkerPool\Tests\Queue;
 
-use App\Protocol\Message;
-use App\Protocol\MessageType;
-use App\Queue\RequestQueue;
+use PhpWorkerPool\Protocol\Message;
+use PhpWorkerPool\Protocol\MessageType;
+use PhpWorkerPool\Queue\RequestQueue;
 use PHPUnit\Framework\TestCase;
 
 final class RequestQueueTest extends TestCase

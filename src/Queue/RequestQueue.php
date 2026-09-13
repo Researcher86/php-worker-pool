@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace App\Queue;
+namespace PhpWorkerPool\Queue;
 
-use App\Protocol\Message;
+use PhpWorkerPool\Protocol\Message;
 use SplQueue;
 
 /**

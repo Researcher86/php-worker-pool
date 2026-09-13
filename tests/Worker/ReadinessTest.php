@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\Worker;
+namespace PhpWorkerPool\Tests\Worker;
 
-use App\Protocol\MessageType;
-use App\Support\Logger;
-use App\Tests\Support\AwaitsReadyWorkers;
-use App\Tests\Support\FakeClock;
-use App\Tests\Support\FileLogger;
-use App\Worker\ForkedWorkerLauncher;
-use App\Worker\WorkerPool;
-use App\Worker\WorkerState;
+use PhpWorkerPool\Protocol\MessageType;
+use PhpWorkerPool\Support\Logger;
+use PhpWorkerPool\Tests\Support\AwaitsReadyWorkers;
+use PhpWorkerPool\Tests\Support\FakeClock;
+use PhpWorkerPool\Tests\Support\FileLogger;
+use PhpWorkerPool\Worker\ForkedWorkerLauncher;
+use PhpWorkerPool\Worker\WorkerPool;
+use PhpWorkerPool\Worker\WorkerState;
 use Closure;
 use PHPUnit\Framework\TestCase;
 

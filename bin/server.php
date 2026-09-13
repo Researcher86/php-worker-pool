@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-use App\Contract\Calculate\CalculateAction;
-use App\Contract\Calculate\CalculateRequest;
-use App\Master\Master;
-use App\Protocol\PayloadHydrator;
-use App\Protocol\Request;
-use App\Protocol\Response;
-use App\Support\Logger;
+use PhpWorkerPool\Contract\Calculate\CalculateAction;
+use PhpWorkerPool\Contract\Calculate\CalculateRequest;
+use PhpWorkerPool\Master\Master;
+use PhpWorkerPool\Protocol\PayloadHydrator;
+use PhpWorkerPool\Protocol\Request;
+use PhpWorkerPool\Protocol\Response;
+use PhpWorkerPool\Support\Logger;
 
 require __DIR__ . '/../vendor/autoload.php';
 

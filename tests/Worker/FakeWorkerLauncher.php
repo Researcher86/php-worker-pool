@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\Worker;
+namespace PhpWorkerPool\Tests\Worker;
 
-use App\IPC\Socket;
-use App\IPC\SocketPair;
-use App\Worker\WorkerLauncher;
-use App\Worker\WorkerProcess;
-use App\Worker\WorkerState;
+use PhpWorkerPool\IPC\Socket;
+use PhpWorkerPool\IPC\SocketPair;
+use PhpWorkerPool\Worker\WorkerLauncher;
+use PhpWorkerPool\Worker\WorkerProcess;
+use PhpWorkerPool\Worker\WorkerState;
 
 /**
  * Test double for WorkerLauncher: wires each "worker" to a real socket pair

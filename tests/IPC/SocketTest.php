@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\IPC;
+namespace PhpWorkerPool\Tests\IPC;
 
-use App\IPC\ConnectionClosedException;
-use App\IPC\Socket;
-use App\Protocol\Message;
-use App\Protocol\MessageType;
+use PhpWorkerPool\IPC\ConnectionClosedException;
+use PhpWorkerPool\IPC\Socket;
+use PhpWorkerPool\Protocol\Message;
+use PhpWorkerPool\Protocol\MessageType;
 use PHPUnit\Framework\TestCase;
 
 final class SocketTest extends TestCase

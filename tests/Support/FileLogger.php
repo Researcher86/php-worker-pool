@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\Support;
+namespace PhpWorkerPool\Tests\Support;
 
-use App\Support\Logger;
+use PhpWorkerPool\Support\Logger;
 
 /**
  * Logger that appends to a file, for assertions across a fork.

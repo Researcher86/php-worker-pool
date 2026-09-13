@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Client;
+namespace PhpWorkerPool\Client;
 
 /**
  * One entry in PendingRequestRegistry: which client is waiting for the

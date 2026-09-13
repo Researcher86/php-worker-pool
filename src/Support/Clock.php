@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Support;
+namespace PhpWorkerPool\Support;
 
 /**
  * Abstracts "what time is it" (matching microtime(true)'s float-seconds

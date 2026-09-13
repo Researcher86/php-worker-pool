@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-use App\Contract\Calculate\CalculateRequest;
-use App\Protocol\Request;
-use App\Sdk\WorkerPoolClient;
+use PhpWorkerPool\Contract\Calculate\CalculateRequest;
+use PhpWorkerPool\Protocol\Request;
+use PhpWorkerPool\Sdk\WorkerPoolClient;
 
 require __DIR__ . '/../vendor/autoload.php';
 
-// Both ends of these calls share App\Contract\Calculate - that's what the
+// Both ends of these calls share PhpWorkerPool\Contract\Calculate - that's what the
 // namespace is for: the caller builds the very CalculateRequest the worker
 // hydrates, so a wrong field name or type is a static error here rather
 // than an invalid_payload at runtime, and the two can never drift apart.

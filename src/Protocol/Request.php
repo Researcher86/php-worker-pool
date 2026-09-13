@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Protocol;
+namespace PhpWorkerPool\Protocol;
 
 /**
  * The application-level request envelope both ends agree on, carried inside

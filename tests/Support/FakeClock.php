@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\Support;
+namespace PhpWorkerPool\Tests\Support;
 
-use App\Support\Clock;
+use PhpWorkerPool\Support\Clock;
 
 /** Test double for Clock: time only moves when the test tells it to. */
 final class FakeClock implements Clock

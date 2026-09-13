@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Worker\Telemetry;
+namespace PhpWorkerPool\Worker\Telemetry;
 
 /**
  * A worker's own writable slot in the shared segment - the only thing a

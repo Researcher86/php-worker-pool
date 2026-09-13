@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace App\Client;
+namespace PhpWorkerPool\Client;
 
-use App\EventLoop\EventLoop;
-use App\IPC\Socket;
-use App\Protocol\Message;
-use App\Protocol\MessageEncoder;
+use PhpWorkerPool\EventLoop\EventLoop;
+use PhpWorkerPool\IPC\Socket;
+use PhpWorkerPool\Protocol\Message;
+use PhpWorkerPool\Protocol\MessageEncoder;
 
 /**
  * Master-side handle for one connected client: its id, its socket, and its
@@ -80,8 +80,8 @@ final class ClientConnection
     /**
      * @return list<Message>
      *
-     * @throws \App\Protocol\MalformedMessageException
-     * @throws \App\IPC\ConnectionClosedException
+     * @throws \PhpWorkerPool\Protocol\MalformedMessageException
+     * @throws \PhpWorkerPool\IPC\ConnectionClosedException
      */
     public function readAvailable(): array
     {

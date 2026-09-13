@@ -2,17 +2,17 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\Worker;
+namespace PhpWorkerPool\Tests\Worker;
 
-use App\Dispatcher\Dispatcher;
-use App\EventLoop\EventLoop;
-use App\Protocol\Message;
-use App\Protocol\MessageType;
-use App\Queue\RequestQueue;
-use App\Worker\Autoscaler;
-use App\Worker\WorkerPool;
-use App\Worker\WorkerState;
-use App\Tests\Support\AwaitsReadyWorkers;
+use PhpWorkerPool\Dispatcher\Dispatcher;
+use PhpWorkerPool\EventLoop\EventLoop;
+use PhpWorkerPool\Protocol\Message;
+use PhpWorkerPool\Protocol\MessageType;
+use PhpWorkerPool\Queue\RequestQueue;
+use PhpWorkerPool\Worker\Autoscaler;
+use PhpWorkerPool\Worker\WorkerPool;
+use PhpWorkerPool\Worker\WorkerState;
+use PhpWorkerPool\Tests\Support\AwaitsReadyWorkers;
 use PHPUnit\Framework\TestCase;
 
 /**

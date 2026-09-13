@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Protocol;
+namespace PhpWorkerPool\Protocol;
 
 /**
  * The counterpart of Request: what an application handler answers with.

@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\Worker;
+namespace PhpWorkerPool\Tests\Worker;
 
-use App\IPC\Socket;
-use App\Worker\WorkerProcess;
-use App\Worker\WorkerState;
+use PhpWorkerPool\IPC\Socket;
+use PhpWorkerPool\Worker\WorkerProcess;
+use PhpWorkerPool\Worker\WorkerState;
 use LogicException;
 use PHPUnit\Framework\TestCase;
 

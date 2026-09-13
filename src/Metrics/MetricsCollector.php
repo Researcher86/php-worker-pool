@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace App\Metrics;
+namespace PhpWorkerPool\Metrics;
 
-use App\Client\PendingRequestRegistry;
-use App\Queue\RequestQueue;
-use App\Worker\WorkerPool;
+use PhpWorkerPool\Client\PendingRequestRegistry;
+use PhpWorkerPool\Queue\RequestQueue;
+use PhpWorkerPool\Worker\WorkerPool;
 
 /**
  * Pulls a Metrics snapshot together from whichever component already owns

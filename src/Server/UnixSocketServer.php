@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace App\Server;
+namespace PhpWorkerPool\Server;
 
-use App\EventLoop\EventLoop;
+use PhpWorkerPool\EventLoop\EventLoop;
 use Closure;
 use RuntimeException;
 

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Support;
+namespace PhpWorkerPool\Support;
 
 /**
  * Minimal logging seam for events that are deliberately survived rather than

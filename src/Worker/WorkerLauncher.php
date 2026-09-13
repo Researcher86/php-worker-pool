@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Worker;
+namespace PhpWorkerPool\Worker;
 
 /**
  * Starts a new worker and returns the master-side handle for it.

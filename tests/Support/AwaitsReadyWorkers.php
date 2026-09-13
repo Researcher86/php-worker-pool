@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\Support;
+namespace PhpWorkerPool\Tests\Support;
 
-use App\Protocol\MessageType;
-use App\Worker\WorkerPool;
+use PhpWorkerPool\Protocol\MessageType;
+use PhpWorkerPool\Worker\WorkerPool;
 
 /**
  * Drives the readiness handshake by hand, for tests that hold a WorkerPool

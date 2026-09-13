@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\Dispatcher;
+namespace PhpWorkerPool\Tests\Dispatcher;
 
-use App\Dispatcher\Dispatcher;
-use App\EventLoop\EventLoop;
-use App\Protocol\Message;
-use App\Protocol\MessageType;
-use App\Queue\RequestQueue;
-use App\Tests\Worker\FakeWorkerLauncher;
-use App\Worker\WorkerPool;
-use App\Tests\Support\AwaitsReadyWorkers;
+use PhpWorkerPool\Dispatcher\Dispatcher;
+use PhpWorkerPool\EventLoop\EventLoop;
+use PhpWorkerPool\Protocol\Message;
+use PhpWorkerPool\Protocol\MessageType;
+use PhpWorkerPool\Queue\RequestQueue;
+use PhpWorkerPool\Tests\Worker\FakeWorkerLauncher;
+use PhpWorkerPool\Worker\WorkerPool;
+use PhpWorkerPool\Tests\Support\AwaitsReadyWorkers;
 use PHPUnit\Framework\TestCase;
 
 final class DispatcherTest extends TestCase

@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace App\Worker;
+namespace PhpWorkerPool\Worker;
 
-use App\IPC\Socket;
-use App\Protocol\Message;
+use PhpWorkerPool\IPC\Socket;
+use PhpWorkerPool\Protocol\Message;
 use LogicException;
 
 /**

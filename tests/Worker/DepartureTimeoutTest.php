@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\Worker;
+namespace PhpWorkerPool\Tests\Worker;
 
-use App\Protocol\Message;
-use App\Protocol\MessageType;
-use App\Tests\Support\FakeClock;
-use App\Worker\WorkerPool;
-use App\Worker\WorkerProcess;
-use App\Worker\WorkerState;
+use PhpWorkerPool\Protocol\Message;
+use PhpWorkerPool\Protocol\MessageType;
+use PhpWorkerPool\Tests\Support\FakeClock;
+use PhpWorkerPool\Worker\WorkerPool;
+use PhpWorkerPool\Worker\WorkerProcess;
+use PhpWorkerPool\Worker\WorkerState;
 use PHPUnit\Framework\TestCase;
 
 /**

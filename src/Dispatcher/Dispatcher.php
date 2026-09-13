@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace App\Dispatcher;
+namespace PhpWorkerPool\Dispatcher;
 
-use App\EventLoop\EventLoop;
-use App\IPC\ConnectionClosedException;
-use App\Protocol\MalformedMessageException;
-use App\Protocol\Message;
-use App\Protocol\MessageType;
-use App\Queue\RequestQueue;
-use App\Worker\WorkerPool;
-use App\Worker\WorkerProcess;
+use PhpWorkerPool\EventLoop\EventLoop;
+use PhpWorkerPool\IPC\ConnectionClosedException;
+use PhpWorkerPool\Protocol\MalformedMessageException;
+use PhpWorkerPool\Protocol\Message;
+use PhpWorkerPool\Protocol\MessageType;
+use PhpWorkerPool\Queue\RequestQueue;
+use PhpWorkerPool\Worker\WorkerPool;
+use PhpWorkerPool\Worker\WorkerProcess;
 use Closure;
 
 /**

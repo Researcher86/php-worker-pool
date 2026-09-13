@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\EventLoop;
+namespace PhpWorkerPool\Tests\EventLoop;
 
-use App\EventLoop\EventLoop;
+use PhpWorkerPool\EventLoop\EventLoop;
 use PHPUnit\Framework\TestCase;
 
 final class EventLoopTest extends TestCase

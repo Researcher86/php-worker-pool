@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\Worker;
+namespace PhpWorkerPool\Tests\Worker;
 
-use App\IPC\SocketPair;
-use App\Worker\WorkerLauncher;
-use App\Worker\WorkerProcess;
-use App\Worker\WorkerState;
+use PhpWorkerPool\IPC\SocketPair;
+use PhpWorkerPool\Worker\WorkerLauncher;
+use PhpWorkerPool\Worker\WorkerProcess;
+use PhpWorkerPool\Worker\WorkerState;
 
 /**
  * Test double for WorkerLauncher: forks a real process, but one that never

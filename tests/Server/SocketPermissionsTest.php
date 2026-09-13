@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\Server;
+namespace PhpWorkerPool\Tests\Server;
 
-use App\EventLoop\EventLoop;
-use App\Server\UnixSocketServer;
+use PhpWorkerPool\EventLoop\EventLoop;
+use PhpWorkerPool\Server\UnixSocketServer;
 use PHPUnit\Framework\TestCase;
 
 /**

@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace App\Sdk;
+namespace PhpWorkerPool\Sdk;
 
-use App\IPC\ConnectionClosedException;
+use PhpWorkerPool\IPC\ConnectionClosedException;
 
 /**
  * A request already on the wire whose answer hasn't been collected yet -

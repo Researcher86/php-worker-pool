@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\Metrics;
+namespace PhpWorkerPool\Tests\Metrics;
 
-use App\Metrics\DurationSummary;
-use App\Metrics\Metrics;
+use PhpWorkerPool\Metrics\DurationSummary;
+use PhpWorkerPool\Metrics\Metrics;
 use PHPUnit\Framework\TestCase;
 
 final class MetricsTest extends TestCase

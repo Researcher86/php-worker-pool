@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Worker;
+namespace PhpWorkerPool\Worker;
 
 /**
  * One worker WorkerPool::reapDeadWorkers() found had exited. $lostRequestId

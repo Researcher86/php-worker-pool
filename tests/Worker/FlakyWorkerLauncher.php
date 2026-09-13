@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\Worker;
+namespace PhpWorkerPool\Tests\Worker;
 
-use App\Worker\WorkerLauncher;
-use App\Worker\WorkerProcess;
+use PhpWorkerPool\Worker\WorkerLauncher;
+use PhpWorkerPool\Worker\WorkerProcess;
 use RuntimeException;
 
 /**

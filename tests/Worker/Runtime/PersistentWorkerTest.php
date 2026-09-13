@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\Worker\Runtime;
+namespace PhpWorkerPool\Tests\Worker\Runtime;
 
-use App\IPC\Socket;
-use App\IPC\SocketPair;
-use App\Protocol\Message;
-use App\Protocol\MessageType;
-use App\Protocol\Request;
-use App\Protocol\Response;
-use App\Protocol\PayloadHydrator;
-use App\Worker\Runtime\WorkerRunner;
+use PhpWorkerPool\IPC\Socket;
+use PhpWorkerPool\IPC\SocketPair;
+use PhpWorkerPool\Protocol\Message;
+use PhpWorkerPool\Protocol\MessageType;
+use PhpWorkerPool\Protocol\Request;
+use PhpWorkerPool\Protocol\Response;
+use PhpWorkerPool\Protocol\PayloadHydrator;
+use PhpWorkerPool\Worker\Runtime\WorkerRunner;
 use PHPUnit\Framework\TestCase;
 
 final class PersistentWorkerTest extends TestCase

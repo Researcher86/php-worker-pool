@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Contract\Calculate;
+namespace PhpWorkerPool\Contract\Calculate;
 
 /**
  * The `calculate` action: an ordinary typed callable, knowing nothing about
@@ -11,7 +11,7 @@ namespace App\Contract\Calculate;
  *
  * Invokable rather than a plain function so it can hold collaborators
  * (a repository, an HTTP client, ...) in its constructor once an action
- * needs any - and so the whole application layer lives in App\Contract,
+ * needs any - and so the whole application layer lives in PhpWorkerPool\Contract,
  * autoloaded like everything else, instead of inside a bin/ script.
  */
 final readonly class CalculateAction

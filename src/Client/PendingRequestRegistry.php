@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace App\Client;
+namespace PhpWorkerPool\Client;
 
-use App\Support\Clock;
-use App\Support\SystemClock;
+use PhpWorkerPool\Support\Clock;
+use PhpWorkerPool\Support\SystemClock;
 
 /**
  * Tracks which client is waiting for the response to which dispatched

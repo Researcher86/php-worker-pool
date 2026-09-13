@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace App\Worker;
+namespace PhpWorkerPool\Worker;
 
-use App\Protocol\Message;
-use App\Protocol\MessageType;
-use App\Support\Clock;
-use App\Support\Logger;
-use App\Support\NullLogger;
-use App\Support\SystemClock;
-use App\Worker\Telemetry\WorkerMemory;
+use PhpWorkerPool\Protocol\Message;
+use PhpWorkerPool\Protocol\MessageType;
+use PhpWorkerPool\Support\Clock;
+use PhpWorkerPool\Support\Logger;
+use PhpWorkerPool\Support\NullLogger;
+use PhpWorkerPool\Support\SystemClock;
+use PhpWorkerPool\Worker\Telemetry\WorkerMemory;
 use InvalidArgumentException;
 use Throwable;
 

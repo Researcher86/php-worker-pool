@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\Metrics;
+namespace PhpWorkerPool\Tests\Metrics;
 
-use App\Metrics\RequestMetrics;
+use PhpWorkerPool\Metrics\RequestMetrics;
 use PHPUnit\Framework\TestCase;
 
 final class RequestMetricsTest extends TestCase

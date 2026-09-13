@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Worker\Telemetry;
+namespace PhpWorkerPool\Worker\Telemetry;
 
 use RuntimeException;
 use Shmop;

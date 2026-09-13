@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace App\IPC;
+namespace PhpWorkerPool\IPC;
 
-use App\Protocol\MalformedMessageException;
-use App\Protocol\Message;
-use App\Protocol\MessageDecoder;
-use App\Protocol\MessageEncoder;
+use PhpWorkerPool\Protocol\MalformedMessageException;
+use PhpWorkerPool\Protocol\Message;
+use PhpWorkerPool\Protocol\MessageDecoder;
+use PhpWorkerPool\Protocol\MessageEncoder;
 
 final class Socket
 {

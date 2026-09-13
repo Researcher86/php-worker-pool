@@ -2,19 +2,19 @@
 
 declare(strict_types=1);
 
-namespace App\Worker\Runtime;
+namespace PhpWorkerPool\Worker\Runtime;
 
-use App\IPC\ConnectionClosedException;
-use App\IPC\Socket;
-use App\Protocol\Message;
-use App\Protocol\MessageType;
-use App\Protocol\PayloadHydrationException;
-use App\Protocol\PayloadHydrator;
-use App\Protocol\Request;
-use App\Protocol\Response;
-use App\Support\Logger;
-use App\Support\NullLogger;
-use App\Worker\Telemetry\TelemetrySlot;
+use PhpWorkerPool\IPC\ConnectionClosedException;
+use PhpWorkerPool\IPC\Socket;
+use PhpWorkerPool\Protocol\Message;
+use PhpWorkerPool\Protocol\MessageType;
+use PhpWorkerPool\Protocol\PayloadHydrationException;
+use PhpWorkerPool\Protocol\PayloadHydrator;
+use PhpWorkerPool\Protocol\Request;
+use PhpWorkerPool\Protocol\Response;
+use PhpWorkerPool\Support\Logger;
+use PhpWorkerPool\Support\NullLogger;
+use PhpWorkerPool\Worker\Telemetry\TelemetrySlot;
 use Closure;
 use Throwable;
 

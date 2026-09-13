@@ -42,7 +42,7 @@ one a reader is most likely to act on by mistake.
 | Decision | Status |
 |---|---|
 | Handler contract is fixed: `Request` in, `Response` out - no signature reflection | current, [why](#business-logic-moved-out-of-the-runtime) |
-| Business logic lives in `App\Contract`, wired in `bin/server.php`, never in the runtime | current, [why](#business-logic-moved-out-of-the-runtime) |
+| Business logic lives in `PhpWorkerPool\Contract`, wired in `bin/server.php`, never in the runtime | current, [why](#business-logic-moved-out-of-the-runtime) |
 | `call()` takes a `Request`; params may be a DTO | current, [why](#business-logic-moved-out-of-the-runtime) |
 | Client can hold several requests in flight (`send`/`await`/`all`) | current, [why](#client-side-multiplexing) |
 | Workers are recycled on request count, age and memory - drained, never killed | current, [why](#worker-recycling-benchmarks-onboarding) |

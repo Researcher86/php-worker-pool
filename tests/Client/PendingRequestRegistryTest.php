@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\Client;
+namespace PhpWorkerPool\Tests\Client;
 
-use App\Client\ClientConnection;
-use App\Client\PendingRequestRegistry;
-use App\IPC\Socket;
-use App\Tests\Support\FakeClock;
+use PhpWorkerPool\Client\ClientConnection;
+use PhpWorkerPool\Client\PendingRequestRegistry;
+use PhpWorkerPool\IPC\Socket;
+use PhpWorkerPool\Tests\Support\FakeClock;
 use PHPUnit\Framework\TestCase;
 
 final class PendingRequestRegistryTest extends TestCase

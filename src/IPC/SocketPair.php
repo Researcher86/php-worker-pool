@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\IPC;
+namespace PhpWorkerPool\IPC;
 
 /**
  * A connected pair of local sockets used to talk across a pcntl_fork(): one

@@ -2,18 +2,18 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\Metrics;
+namespace PhpWorkerPool\Tests\Metrics;
 
-use App\Client\ClientConnection;
-use App\Client\PendingRequestRegistry;
-use App\IPC\Socket;
-use App\Metrics\MetricsCollector;
-use App\Metrics\RequestMetrics;
-use App\Protocol\Message;
-use App\Protocol\MessageType;
-use App\Queue\RequestQueue;
-use App\Tests\Worker\FakeWorkerLauncher;
-use App\Worker\WorkerPool;
+use PhpWorkerPool\Client\ClientConnection;
+use PhpWorkerPool\Client\PendingRequestRegistry;
+use PhpWorkerPool\IPC\Socket;
+use PhpWorkerPool\Metrics\MetricsCollector;
+use PhpWorkerPool\Metrics\RequestMetrics;
+use PhpWorkerPool\Protocol\Message;
+use PhpWorkerPool\Protocol\MessageType;
+use PhpWorkerPool\Queue\RequestQueue;
+use PhpWorkerPool\Tests\Worker\FakeWorkerLauncher;
+use PhpWorkerPool\Worker\WorkerPool;
 use PHPUnit\Framework\TestCase;
 
 final class MetricsCollectorTest extends TestCase

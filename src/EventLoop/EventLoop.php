@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\EventLoop;
+namespace PhpWorkerPool\EventLoop;
 
 /**
  * Minimal reactor: components register a readable (or writable) resource plus

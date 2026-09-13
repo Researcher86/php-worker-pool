@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\Worker;
+namespace PhpWorkerPool\Tests\Worker;
 
-use App\Protocol\Message;
-use App\Protocol\MessageType;
-use App\Tests\Support\FakeClock;
-use App\Worker\RecyclingPolicy;
-use App\Worker\Telemetry\WorkerMemory;
-use App\Worker\WorkerPool;
-use App\Worker\WorkerState;
+use PhpWorkerPool\Protocol\Message;
+use PhpWorkerPool\Protocol\MessageType;
+use PhpWorkerPool\Tests\Support\FakeClock;
+use PhpWorkerPool\Worker\RecyclingPolicy;
+use PhpWorkerPool\Worker\Telemetry\WorkerMemory;
+use PhpWorkerPool\Worker\WorkerPool;
+use PhpWorkerPool\Worker\WorkerState;
 use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
 

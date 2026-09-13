@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Support;
+namespace PhpWorkerPool\Support;
 
 /**
  * Timestamped lines to STDERR - kept apart from STDOUT, which the SIGUSR1

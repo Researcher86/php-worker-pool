@@ -2,17 +2,17 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\E2E;
+namespace PhpWorkerPool\Tests\E2E;
 
-use App\Contract\Calculate\CalculateRequest;
-use App\IPC\Socket;
-use App\Protocol\Message;
-use App\Protocol\MessageType;
-use App\Protocol\Request;
-use App\Sdk\ConnectionFailedException;
-use App\Sdk\PendingResponse;
-use App\Sdk\ServerErrorException;
-use App\Sdk\WorkerPoolClient;
+use PhpWorkerPool\Contract\Calculate\CalculateRequest;
+use PhpWorkerPool\IPC\Socket;
+use PhpWorkerPool\Protocol\Message;
+use PhpWorkerPool\Protocol\MessageType;
+use PhpWorkerPool\Protocol\Request;
+use PhpWorkerPool\Sdk\ConnectionFailedException;
+use PhpWorkerPool\Sdk\PendingResponse;
+use PhpWorkerPool\Sdk\ServerErrorException;
+use PhpWorkerPool\Sdk\WorkerPoolClient;
 use PHPUnit\Framework\TestCase;
 
 /**

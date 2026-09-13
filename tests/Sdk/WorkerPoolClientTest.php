@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\Sdk;
+namespace PhpWorkerPool\Tests\Sdk;
 
-use App\IPC\Socket;
-use App\Protocol\Message;
-use App\Protocol\MessageType;
-use App\Protocol\Request;
-use App\Sdk\ConnectionFailedException;
-use App\Sdk\RequestTimedOutException;
-use App\Sdk\ServerErrorException;
-use App\Sdk\WorkerPoolClient;
+use PhpWorkerPool\IPC\Socket;
+use PhpWorkerPool\Protocol\Message;
+use PhpWorkerPool\Protocol\MessageType;
+use PhpWorkerPool\Protocol\Request;
+use PhpWorkerPool\Sdk\ConnectionFailedException;
+use PhpWorkerPool\Sdk\RequestTimedOutException;
+use PhpWorkerPool\Sdk\ServerErrorException;
+use PhpWorkerPool\Sdk\WorkerPoolClient;
 use Closure;
 use LogicException;
 use PHPUnit\Framework\TestCase;
@@ -325,7 +325,7 @@ final class WorkerPoolClientTest extends TestCase
      * typed.
      *
      * Deliberately a DTO local to this test rather than one from
-     * App\Contract: what's under test is the SDK turning ANY object into
+     * PhpWorkerPool\Contract: what's under test is the SDK turning ANY object into
      * params, and a transport-level test shouldn't reach up into the
      * application layer to prove it. Real callers in this codebase do share
      * the contract class - see bin/client.php - and MasterEndToEndTest

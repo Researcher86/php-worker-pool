@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace App\Sdk;
+namespace PhpWorkerPool\Sdk;
 
-use App\IPC\ConnectionClosedException;
-use App\IPC\Socket;
-use App\Protocol\MalformedMessageException;
-use App\Protocol\Message;
-use App\Protocol\MessageType;
-use App\Protocol\Payload;
-use App\Protocol\Request;
+use PhpWorkerPool\IPC\ConnectionClosedException;
+use PhpWorkerPool\IPC\Socket;
+use PhpWorkerPool\Protocol\MalformedMessageException;
+use PhpWorkerPool\Protocol\Message;
+use PhpWorkerPool\Protocol\MessageType;
+use PhpWorkerPool\Protocol\Payload;
+use PhpWorkerPool\Protocol\Request;
 use LogicException;
 
 /**

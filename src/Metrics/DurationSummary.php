@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Metrics;
+namespace PhpWorkerPool\Metrics;
 
 /** A DurationStat frozen at snapshot time, in milliseconds. */
 final readonly class DurationSummary

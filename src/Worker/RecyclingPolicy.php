@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Worker;
+namespace PhpWorkerPool\Worker;
 
 /**
  * When a persistent worker has done enough and should be replaced by a fresh

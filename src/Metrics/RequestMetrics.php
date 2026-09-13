@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Metrics;
+namespace PhpWorkerPool\Metrics;
 
 /**
  * Lifetime counters for requests Master has accepted from clients.

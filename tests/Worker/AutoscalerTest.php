@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\Worker;
+namespace PhpWorkerPool\Tests\Worker;
 
-use App\Protocol\Message;
-use App\Protocol\MessageType;
-use App\Queue\RequestQueue;
-use App\Tests\Support\FakeClock;
-use App\Worker\Autoscaler;
-use App\Worker\WorkerPool;
+use PhpWorkerPool\Protocol\Message;
+use PhpWorkerPool\Protocol\MessageType;
+use PhpWorkerPool\Queue\RequestQueue;
+use PhpWorkerPool\Tests\Support\FakeClock;
+use PhpWorkerPool\Worker\Autoscaler;
+use PhpWorkerPool\Worker\WorkerPool;
 use PHPUnit\Framework\TestCase;
 
 final class AutoscalerTest extends TestCase

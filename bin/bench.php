@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-use App\Protocol\Request;
-use App\Sdk\ServerErrorException;
-use App\Sdk\WorkerPoolClient;
+use PhpWorkerPool\Protocol\Request;
+use PhpWorkerPool\Sdk\ServerErrorException;
+use PhpWorkerPool\Sdk\WorkerPoolClient;
 use RuntimeException;
 
 require __DIR__ . '/../vendor/autoload.php';

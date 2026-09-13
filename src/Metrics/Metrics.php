@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Metrics;
+namespace PhpWorkerPool\Metrics;
 
 /**
  * A point-in-time snapshot of the Worker Pool's observable state

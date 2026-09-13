@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\Client;
+namespace PhpWorkerPool\Tests\Client;
 
-use App\Client\ClientConnection;
-use App\EventLoop\EventLoop;
-use App\IPC\Socket;
-use App\Protocol\Message;
-use App\Protocol\MessageType;
+use PhpWorkerPool\Client\ClientConnection;
+use PhpWorkerPool\EventLoop\EventLoop;
+use PhpWorkerPool\IPC\Socket;
+use PhpWorkerPool\Protocol\Message;
+use PhpWorkerPool\Protocol\MessageType;
 use PHPUnit\Framework\TestCase;
 
 final class ClientConnectionTest extends TestCase

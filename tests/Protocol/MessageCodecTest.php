@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\Protocol;
+namespace PhpWorkerPool\Tests\Protocol;
 
-use App\Protocol\MalformedMessageException;
-use App\Protocol\Message;
-use App\Protocol\MessageDecoder;
-use App\Protocol\MessageEncoder;
-use App\Protocol\MessageType;
+use PhpWorkerPool\Protocol\MalformedMessageException;
+use PhpWorkerPool\Protocol\Message;
+use PhpWorkerPool\Protocol\MessageDecoder;
+use PhpWorkerPool\Protocol\MessageEncoder;
+use PhpWorkerPool\Protocol\MessageType;
 use PHPUnit\Framework\TestCase;
 
 /**

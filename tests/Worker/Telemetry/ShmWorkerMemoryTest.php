@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\Worker\Telemetry;
+namespace PhpWorkerPool\Tests\Worker\Telemetry;
 
-use App\IPC\SocketPair;
-use App\Protocol\Message;
-use App\Protocol\MessageType;
-use App\Worker\ForkedWorkerLauncher;
-use App\Worker\Telemetry\SharedTelemetry;
-use App\Worker\Telemetry\ShmWorkerMemory;
+use PhpWorkerPool\IPC\SocketPair;
+use PhpWorkerPool\Protocol\Message;
+use PhpWorkerPool\Protocol\MessageType;
+use PhpWorkerPool\Worker\ForkedWorkerLauncher;
+use PhpWorkerPool\Worker\Telemetry\SharedTelemetry;
+use PhpWorkerPool\Worker\Telemetry\ShmWorkerMemory;
 use PHPUnit\Framework\TestCase;
 
 final class ShmWorkerMemoryTest extends TestCase

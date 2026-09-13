@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Contract\Calculate;
+namespace PhpWorkerPool\Contract\Calculate;
 
 /**
  * What the `calculate` action produces. Response::of() turns its public

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Metrics;
+namespace PhpWorkerPool\Metrics;
 
 /**
  * Running count, mean and worst case for one kind of duration.
