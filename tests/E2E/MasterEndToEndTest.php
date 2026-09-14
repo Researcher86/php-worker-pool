@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Tests\E2E;
 
+use PHPUnit\Framework\TestCase;
 use PhpWorkerPool\Contract\Calculate\CalculateRequest;
 use PhpWorkerPool\Protocol\Request;
 use PhpWorkerPool\Sdk\ConnectionFailedException;
 use PhpWorkerPool\Sdk\WorkerPoolClient;
-use PHPUnit\Framework\TestCase;
 
 /**
  * Boots the real bin/server.php as a separate OS process and talks to it

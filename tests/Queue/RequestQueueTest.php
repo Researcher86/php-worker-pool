@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Tests\Queue;
 
+use PHPUnit\Framework\TestCase;
 use PhpWorkerPool\Protocol\Message;
 use PhpWorkerPool\Protocol\MessageType;
 use PhpWorkerPool\Queue\RequestQueue;
-use PHPUnit\Framework\TestCase;
 
 final class RequestQueueTest extends TestCase
 {

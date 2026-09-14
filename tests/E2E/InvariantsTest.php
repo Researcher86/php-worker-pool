@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Tests\E2E;
 
+use PHPUnit\Framework\TestCase;
 use PhpWorkerPool\Contract\Calculate\CalculateRequest;
 use PhpWorkerPool\IPC\Socket;
 use PhpWorkerPool\Protocol\Message;
@@ -13,7 +14,6 @@ use PhpWorkerPool\Sdk\ConnectionFailedException;
 use PhpWorkerPool\Sdk\PendingResponse;
 use PhpWorkerPool\Sdk\ServerErrorException;
 use PhpWorkerPool\Sdk\WorkerPoolClient;
-use PHPUnit\Framework\TestCase;
 
 /**
  * Properties that must hold no matter what happens, asserted against a real

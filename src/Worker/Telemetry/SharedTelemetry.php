@@ -118,7 +118,7 @@ final class SharedTelemetry
             unset($orphan);
         }
 
-        $segment = shmop_open($key, 'c', 0600, $slots * self::SLOT_BYTES);
+        $segment = shmop_open($key, 'c', 0o600, $slots * self::SLOT_BYTES);
 
         if ($segment === false) {
             throw new RuntimeException('telemetry: cannot open a shared memory segment for ' . $keyPath);

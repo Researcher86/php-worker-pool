@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Tests\Worker;
 
+use InvalidArgumentException;
+use PHPUnit\Framework\TestCase;
 use PhpWorkerPool\Protocol\Message;
 use PhpWorkerPool\Protocol\MessageType;
 use PhpWorkerPool\Tests\Support\FakeClock;
@@ -11,8 +13,6 @@ use PhpWorkerPool\Worker\RecyclingPolicy;
 use PhpWorkerPool\Worker\Telemetry\WorkerMemory;
 use PhpWorkerPool\Worker\WorkerPool;
 use PhpWorkerPool\Worker\WorkerState;
-use InvalidArgumentException;
-use PHPUnit\Framework\TestCase;
 
 final class RecyclingTest extends TestCase
 {

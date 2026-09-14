@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Tests\Metrics;
 
-use PhpWorkerPool\Metrics\RequestMetrics;
 use PHPUnit\Framework\TestCase;
+use PhpWorkerPool\Metrics\RequestMetrics;
 
 final class RequestMetricsTest extends TestCase
 {

@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Tests\Protocol;
 
+use PHPUnit\Framework\TestCase;
 use PhpWorkerPool\Protocol\MalformedMessageException;
 use PhpWorkerPool\Protocol\Message;
 use PhpWorkerPool\Protocol\MessageDecoder;
 use PhpWorkerPool\Protocol\MessageEncoder;
 use PhpWorkerPool\Protocol\MessageType;
-use PHPUnit\Framework\TestCase;
 
 /**
  * Round-trips MessageEncoder + MessageDecoder together — the framing and

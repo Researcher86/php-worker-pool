@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Tests\Server;
 
+use PHPUnit\Framework\TestCase;
 use PhpWorkerPool\EventLoop\EventLoop;
 use PhpWorkerPool\Server\UnixSocketServer;
-use PHPUnit\Framework\TestCase;
 
 final class UnixSocketServerTest extends TestCase
 {

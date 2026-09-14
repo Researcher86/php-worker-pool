@@ -4,15 +4,15 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Tests\Dispatcher;
 
+use PHPUnit\Framework\TestCase;
 use PhpWorkerPool\Dispatcher\Dispatcher;
 use PhpWorkerPool\EventLoop\EventLoop;
 use PhpWorkerPool\Protocol\Message;
 use PhpWorkerPool\Protocol\MessageType;
 use PhpWorkerPool\Queue\RequestQueue;
+use PhpWorkerPool\Tests\Support\AwaitsReadyWorkers;
 use PhpWorkerPool\Tests\Worker\FakeWorkerLauncher;
 use PhpWorkerPool\Worker\WorkerPool;
-use PhpWorkerPool\Tests\Support\AwaitsReadyWorkers;
-use PHPUnit\Framework\TestCase;
 
 final class DispatcherTest extends TestCase
 {

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Dispatcher;
 
+use Closure;
 use PhpWorkerPool\EventLoop\EventLoop;
 use PhpWorkerPool\IPC\ConnectionClosedException;
 use PhpWorkerPool\Protocol\MalformedMessageException;
@@ -12,7 +13,6 @@ use PhpWorkerPool\Protocol\MessageType;
 use PhpWorkerPool\Queue\RequestQueue;
 use PhpWorkerPool\Worker\WorkerPool;
 use PhpWorkerPool\Worker\WorkerProcess;
-use Closure;
 
 /**
  * Event-driven bridge between the RequestQueue and the WorkerPool.

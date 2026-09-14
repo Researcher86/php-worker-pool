@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Tests\Client;
 
+use PHPUnit\Framework\TestCase;
 use PhpWorkerPool\Client\ClientConnection;
 use PhpWorkerPool\EventLoop\EventLoop;
 use PhpWorkerPool\IPC\Socket;
 use PhpWorkerPool\Protocol\Message;
 use PhpWorkerPool\Protocol\MessageType;
-use PHPUnit\Framework\TestCase;
 
 final class ClientConnectionTest extends TestCase
 {

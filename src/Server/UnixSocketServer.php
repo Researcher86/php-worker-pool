@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Server;
 
-use PhpWorkerPool\EventLoop\EventLoop;
 use Closure;
+use PhpWorkerPool\EventLoop\EventLoop;
 use RuntimeException;
 
 /**
@@ -49,7 +49,7 @@ final readonly class UnixSocketServer
         private EventLoop $loop,
         callable $onConnect,
         // Permission bits for the socket file - who may connect.
-        private int $mode = 0600,
+        private int $mode = 0o600,
         // Group to own the socket, or null to leave it as whatever the
         // process's own group is.
         private ?string $group = null,
@@ -64,7 +64,7 @@ final readonly class UnixSocketServer
         // restrictively closes the window where it exists at the wrong mode;
         // the chmod below then sets it exactly, since a umask can only
         // remove bits.
-        $previousUmask = umask(0777 & ~$this->mode);
+        $previousUmask = umask(0o777 & ~$this->mode);
 
         try {
             $this->server = stream_socket_server(

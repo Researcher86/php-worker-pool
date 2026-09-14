@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Tests\Protocol;
 
-use PhpWorkerPool\Protocol\Request;
+use PHPUnit\Framework\TestCase;
 use PhpWorkerPool\Protocol\PayloadHydrationException;
 use PhpWorkerPool\Protocol\PayloadHydrator;
-use PHPUnit\Framework\TestCase;
+use PhpWorkerPool\Protocol\Request;
 
 final class PayloadHydratorTest extends TestCase
 {

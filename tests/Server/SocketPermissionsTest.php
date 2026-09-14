@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Tests\Server;
 
+use PHPUnit\Framework\TestCase;
 use PhpWorkerPool\EventLoop\EventLoop;
 use PhpWorkerPool\Server\UnixSocketServer;
-use PHPUnit\Framework\TestCase;
 
 /**
  * The socket is an unauthenticated command channel: whoever can connect can
@@ -31,7 +31,7 @@ final class SocketPermissionsTest extends TestCase
     {
         clearstatcache(true, $this->path);
 
-        return (int) (fileperms($this->path) & 0777);
+        return (int) (fileperms($this->path) & 0o777);
     }
 
     /**
@@ -44,7 +44,7 @@ final class SocketPermissionsTest extends TestCase
         $server = new UnixSocketServer($this->path, new EventLoop(), static function (): void {
         });
 
-        $this->assertSame(0600, $this->mode(), 'the socket must not be reachable by other accounts by default');
+        $this->assertSame(0o600, $this->mode(), 'the socket must not be reachable by other accounts by default');
 
         $server->close();
     }
@@ -52,9 +52,9 @@ final class SocketPermissionsTest extends TestCase
     public function testModeIsConfigurable(): void
     {
         $server = new UnixSocketServer($this->path, new EventLoop(), static function (): void {
-        }, mode: 0660);
+        }, mode: 0o660);
 
-        $this->assertSame(0660, $this->mode());
+        $this->assertSame(0o660, $this->mode());
 
         $server->close();
     }
@@ -74,7 +74,7 @@ final class SocketPermissionsTest extends TestCase
             $server = new UnixSocketServer($this->path, new EventLoop(), static function (): void {
             });
 
-            $this->assertSame(0600, $this->mode());
+            $this->assertSame(0o600, $this->mode());
 
             $server->close();
         } finally {

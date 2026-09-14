@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Tests\Client;
 
+use PHPUnit\Framework\TestCase;
 use PhpWorkerPool\Client\ClientConnection;
 use PhpWorkerPool\Client\ClientRegistry;
 use PhpWorkerPool\Client\PendingRequestRegistry;
@@ -15,7 +16,6 @@ use PhpWorkerPool\Protocol\MessageType;
 use PhpWorkerPool\Queue\RequestQueue;
 use PhpWorkerPool\Tests\Worker\FakeWorkerLauncher;
 use PhpWorkerPool\Worker\WorkerPool;
-use PHPUnit\Framework\TestCase;
 
 final class ClientRegistryTest extends TestCase
 {
@@ -58,7 +58,7 @@ final class ClientRegistryTest extends TestCase
         [$serverEnd, $clientEnd] = $this->pair();
         $registry->accept($serverEnd);
 
-        (new Socket($clientEnd))->write(new Message(MessageType::REQUEST, 'req-1', ['x' => 1]));
+        new Socket($clientEnd)->write(new Message(MessageType::REQUEST, 'req-1', ['x' => 1]));
         $loop->tick();
 
         $this->assertNotNull($received);
@@ -209,7 +209,7 @@ final class ClientRegistryTest extends TestCase
 
         // One request, purely to get hold of the registry's own
         // ClientConnection for this peer.
-        (new Socket($clientEnd))->write(new Message(MessageType::REQUEST, 'req-1'));
+        new Socket($clientEnd)->write(new Message(MessageType::REQUEST, 'req-1'));
         $loop->tick();
         $this->assertInstanceOf(ClientConnection::class, $seen);
 

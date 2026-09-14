@@ -4,13 +4,12 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Tests\Worker\Telemetry;
 
-use PhpWorkerPool\IPC\SocketPair;
+use PHPUnit\Framework\TestCase;
 use PhpWorkerPool\Protocol\Message;
 use PhpWorkerPool\Protocol\MessageType;
 use PhpWorkerPool\Worker\ForkedWorkerLauncher;
 use PhpWorkerPool\Worker\Telemetry\SharedTelemetry;
 use PhpWorkerPool\Worker\Telemetry\ShmWorkerMemory;
-use PHPUnit\Framework\TestCase;
 
 final class ShmWorkerMemoryTest extends TestCase
 {
@@ -48,7 +47,7 @@ final class ShmWorkerMemoryTest extends TestCase
         $telemetry->bind($slot, $pid);
         pcntl_waitpid($pid, $status);
 
-        $this->assertSame(64 * 1024 * 1024, (new ShmWorkerMemory($telemetry))->measure($pid));
+        $this->assertSame(64 * 1024 * 1024, new ShmWorkerMemory($telemetry)->measure($pid));
     }
 
     public function testUnmeasurableWorkerReportsNullRatherThanZero(): void
@@ -58,7 +57,7 @@ final class ShmWorkerMemoryTest extends TestCase
         // A worker nobody has heard from is exactly what RecyclingPolicy
         // must not treat as "using 0 bytes" - it leaves the memory limit
         // unenforced instead.
-        $this->assertNull((new ShmWorkerMemory($telemetry))->measure(999_999));
+        $this->assertNull(new ShmWorkerMemory($telemetry)->measure(999_999));
     }
 
     public function testAForkedWorkerPublishesItsOwnMemoryWhileServingRequests(): void

@@ -39,7 +39,7 @@ final readonly class PayloadHydrator
      */
     public static function hydrate(string $class, array $payload): object
     {
-        $constructor = (new ReflectionClass($class))->getConstructor();
+        $constructor = new ReflectionClass($class)->getConstructor();
 
         if ($constructor === null) {
             throw new PayloadHydrationException(sprintf('%s has no constructor to hydrate through', $class));

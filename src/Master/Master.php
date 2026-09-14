@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Master;
 
+use Closure;
 use PhpWorkerPool\Client\ClientConnection;
 use PhpWorkerPool\Client\ClientRegistry;
 use PhpWorkerPool\Client\PendingRequest;
@@ -27,7 +28,6 @@ use PhpWorkerPool\Worker\RecyclingPolicy;
 use PhpWorkerPool\Worker\Telemetry\SharedTelemetry;
 use PhpWorkerPool\Worker\Telemetry\ShmWorkerMemory;
 use PhpWorkerPool\Worker\WorkerPool;
-use Closure;
 use RuntimeException;
 use Throwable;
 
@@ -79,7 +79,7 @@ final class Master
         // anything that can reach it can run work on every worker - so the
         // default is owner-only. Open it to a shared group (0660 + a group
         // both the Master and PHP-FPM belong to) rather than to everyone.
-        private readonly int $socketMode = 0600,
+        private readonly int $socketMode = 0o600,
         private readonly ?string $socketGroup = null,
         // PHASES.md Phase 20's bounds - the pool starts at the floor and grows
         // under load rather than starting pre-scaled.

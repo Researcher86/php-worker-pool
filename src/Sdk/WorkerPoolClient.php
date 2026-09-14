@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Sdk;
 
+use LogicException;
 use PhpWorkerPool\IPC\ConnectionClosedException;
 use PhpWorkerPool\IPC\Socket;
 use PhpWorkerPool\Protocol\MalformedMessageException;
@@ -11,7 +12,6 @@ use PhpWorkerPool\Protocol\Message;
 use PhpWorkerPool\Protocol\MessageType;
 use PhpWorkerPool\Protocol\Payload;
 use PhpWorkerPool\Protocol\Request;
-use LogicException;
 
 /**
  * Client for talking to a running Master over its Unix domain socket - meant

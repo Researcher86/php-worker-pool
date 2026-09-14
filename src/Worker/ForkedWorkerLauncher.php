@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Worker;
 
+use Closure;
 use PhpWorkerPool\IPC\SocketPair;
 use PhpWorkerPool\Protocol\Request;
 use PhpWorkerPool\Protocol\Response;
@@ -11,7 +12,6 @@ use PhpWorkerPool\Support\Logger;
 use PhpWorkerPool\Support\NullLogger;
 use PhpWorkerPool\Worker\Runtime\WorkerRunner;
 use PhpWorkerPool\Worker\Telemetry\SharedTelemetry;
-use Closure;
 use RuntimeException;
 
 /**

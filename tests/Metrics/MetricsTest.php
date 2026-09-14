@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Tests\Metrics;
 
+use PHPUnit\Framework\TestCase;
 use PhpWorkerPool\Metrics\DurationSummary;
 use PhpWorkerPool\Metrics\Metrics;
-use PHPUnit\Framework\TestCase;
 
 final class MetricsTest extends TestCase
 {

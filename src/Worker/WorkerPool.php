@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Worker;
 
+use InvalidArgumentException;
 use PhpWorkerPool\Protocol\Message;
 use PhpWorkerPool\Protocol\MessageType;
 use PhpWorkerPool\Support\Clock;
@@ -11,7 +12,6 @@ use PhpWorkerPool\Support\Logger;
 use PhpWorkerPool\Support\NullLogger;
 use PhpWorkerPool\Support\SystemClock;
 use PhpWorkerPool\Worker\Telemetry\WorkerMemory;
-use InvalidArgumentException;
 use Throwable;
 
 /**

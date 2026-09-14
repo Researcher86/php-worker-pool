@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Tests\Worker\Telemetry;
 
+use PHPUnit\Framework\TestCase;
 use PhpWorkerPool\Worker\Telemetry\SharedTelemetry;
 use PhpWorkerPool\Worker\Telemetry\TelemetrySlot;
-use PHPUnit\Framework\TestCase;
 
 final class SharedTelemetryTest extends TestCase
 {

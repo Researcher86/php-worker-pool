@@ -1,5 +1,4 @@
-.PHONY: up down shell build install test analyse bench \
-        run-server run-server-debug run-client run-client-debug run-example
+.PHONY: up down shell build install test analyse bench format format-check run-server run-server-debug run-client run-client-debug run-example
 
 up:
 	docker compose up -d
@@ -49,3 +48,9 @@ run-client-debug: up
 
 bench: up
 	docker compose exec php php bin/bench.php $(ARGS)
+
+format: up
+	docker compose exec php composer format
+
+format-check: up
+	docker compose exec php composer format:check

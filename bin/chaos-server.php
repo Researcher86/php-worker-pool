@@ -5,9 +5,9 @@ declare(strict_types=1);
 use PhpWorkerPool\Contract\Calculate\CalculateAction;
 use PhpWorkerPool\Contract\Calculate\CalculateRequest;
 use PhpWorkerPool\Master\Master;
+use PhpWorkerPool\Protocol\PayloadHydrator;
 use PhpWorkerPool\Protocol\Request;
 use PhpWorkerPool\Protocol\Response;
-use PhpWorkerPool\Protocol\PayloadHydrator;
 use PhpWorkerPool\Worker\RecyclingPolicy;
 
 require __DIR__ . '/../vendor/autoload.php';
@@ -28,7 +28,7 @@ $handler = static fn (Request $request): Response => match ($request->action) {
     default => Response::error('unknown_action'),
 };
 
-(new Master(
+new Master(
     socketPath: $socketPath !== false && $socketPath !== '' ? $socketPath : '/tmp/php-worker-pool-chaos.sock',
     minWorkers: 2,
     maxWorkers: 6,
@@ -36,4 +36,4 @@ $handler = static fn (Request $request): Response => match ($request->action) {
     workerExecutionTimeoutSeconds: 15.0,
     recycling: new RecyclingPolicy(maxRequests: 7),
     handler: $handler,
-))->run();
+)->run();

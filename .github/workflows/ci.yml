@@ -24,3 +24,5 @@ jobs:
       - run: composer test
 
       - run: composer analyse
+
+      - run: composer format:check

@@ -65,34 +65,34 @@ final readonly class Metrics
     {
         return sprintf(
             <<<'TEXT'
-            Worker Pool Status
+                Worker Pool Status
 
-            Workers:
-              Total: %d
-              Idle: %d
-              Busy: %d
-              Draining: %d
-              Crashed (lifetime): %d
-              Recycled (lifetime): %d
-              Terminated (lifetime): %d
+                Workers:
+                  Total: %d
+                  Idle: %d
+                  Busy: %d
+                  Draining: %d
+                  Crashed (lifetime): %d
+                  Recycled (lifetime): %d
+                  Terminated (lifetime): %d
 
-            Queue:
-              Pending: %d
+                Queue:
+                  Pending: %d
 
-            Requests:
-              Total: %d
-              Completed: %d
-              Failed: %d
-              Timeout: %d
-              Rejected: %d
-              In flight: %d
+                Requests:
+                  Total: %d
+                  Completed: %d
+                  Failed: %d
+                  Timeout: %d
+                  Rejected: %d
+                  In flight: %d
 
-            Latency (ms, over %d completed):
-              Queue wait: avg %.2f  max %.2f
-              Execution:  avg %.2f  max %.2f
-              Total:      avg %.2f  max %.2f
+                Latency (ms, over %d completed):
+                  Queue wait: avg %.2f  max %.2f
+                  Execution:  avg %.2f  max %.2f
+                  Total:      avg %.2f  max %.2f
 
-            TEXT,
+                TEXT,
             $this->workersTotal,
             $this->workersIdle,
             $this->workersBusy,

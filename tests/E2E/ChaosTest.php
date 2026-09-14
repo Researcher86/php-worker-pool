@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Tests\E2E;
 
+use PHPUnit\Framework\TestCase;
 use PhpWorkerPool\Contract\Calculate\CalculateRequest;
 use PhpWorkerPool\Protocol\Request;
 use PhpWorkerPool\Sdk\ConnectionFailedException;
 use PhpWorkerPool\Sdk\ServerErrorException;
 use PhpWorkerPool\Sdk\WorkerPoolClient;
-use PHPUnit\Framework\TestCase;
 
 /**
  * The scenarios that only a real Master with real forked workers can prove:

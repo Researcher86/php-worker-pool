@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Tests\Worker;
 
+use LogicException;
+use PHPUnit\Framework\TestCase;
 use PhpWorkerPool\IPC\Socket;
 use PhpWorkerPool\Worker\WorkerProcess;
 use PhpWorkerPool\Worker\WorkerState;
-use LogicException;
-use PHPUnit\Framework\TestCase;
 
 final class WorkerProcessTest extends TestCase
 {

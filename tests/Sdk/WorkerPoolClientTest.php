@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Tests\Sdk;
 
+use Closure;
+use LogicException;
+use PHPUnit\Framework\TestCase;
 use PhpWorkerPool\IPC\Socket;
 use PhpWorkerPool\Protocol\Message;
 use PhpWorkerPool\Protocol\MessageType;
@@ -12,9 +15,6 @@ use PhpWorkerPool\Sdk\ConnectionFailedException;
 use PhpWorkerPool\Sdk\RequestTimedOutException;
 use PhpWorkerPool\Sdk\ServerErrorException;
 use PhpWorkerPool\Sdk\WorkerPoolClient;
-use Closure;
-use LogicException;
-use PHPUnit\Framework\TestCase;
 
 final class WorkerPoolClientTest extends TestCase
 {

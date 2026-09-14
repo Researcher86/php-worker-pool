@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Tests\IPC;
 
+use PHPUnit\Framework\TestCase;
 use PhpWorkerPool\IPC\ConnectionClosedException;
 use PhpWorkerPool\IPC\Socket;
 use PhpWorkerPool\Protocol\Message;
 use PhpWorkerPool\Protocol\MessageType;
-use PHPUnit\Framework\TestCase;
 
 final class SocketTest extends TestCase
 {

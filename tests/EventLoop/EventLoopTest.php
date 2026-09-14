@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Tests\EventLoop;
 
-use PhpWorkerPool\EventLoop\EventLoop;
 use PHPUnit\Framework\TestCase;
+use PhpWorkerPool\EventLoop\EventLoop;
 
 final class EventLoopTest extends TestCase
 {

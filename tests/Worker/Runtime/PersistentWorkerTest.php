@@ -4,19 +4,18 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Tests\Worker\Runtime;
 
+use PHPUnit\Framework\TestCase;
 use PhpWorkerPool\IPC\Socket;
 use PhpWorkerPool\IPC\SocketPair;
 use PhpWorkerPool\Protocol\Message;
 use PhpWorkerPool\Protocol\MessageType;
+use PhpWorkerPool\Protocol\PayloadHydrator;
 use PhpWorkerPool\Protocol\Request;
 use PhpWorkerPool\Protocol\Response;
-use PhpWorkerPool\Protocol\PayloadHydrator;
 use PhpWorkerPool\Worker\Runtime\WorkerRunner;
-use PHPUnit\Framework\TestCase;
 
 final class PersistentWorkerTest extends TestCase
 {
-
     /**
      * A real worker announces itself before it will serve anything, so that
      * message is the first thing on the wire - consumed here so each test
@@ -96,7 +95,7 @@ final class PersistentWorkerTest extends TestCase
                 'result' => $request->params['a'] + $request->params['b'],
             ]);
 
-            (new WorkerRunner($pair->getWorkerSocket(), $calculate))->run();
+            new WorkerRunner($pair->getWorkerSocket(), $calculate)->run();
 
             exit(0);
         }
@@ -157,7 +156,7 @@ final class PersistentWorkerTest extends TestCase
                 return Response::of(['result' => $sum->a + $sum->b]);
             };
 
-            (new WorkerRunner($pair->getWorkerSocket(), $handler))->run();
+            new WorkerRunner($pair->getWorkerSocket(), $handler)->run();
 
             exit(0);
         }
@@ -222,7 +221,7 @@ final class PersistentWorkerTest extends TestCase
                 default => Response::error('unknown_action'),
             };
 
-            (new WorkerRunner($pair->getWorkerSocket(), $handler))->run();
+            new WorkerRunner($pair->getWorkerSocket(), $handler)->run();
 
             exit(0);
         }

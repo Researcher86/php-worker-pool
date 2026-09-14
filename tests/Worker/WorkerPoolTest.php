@@ -4,17 +4,17 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Tests\Worker;
 
+use PHPUnit\Framework\TestCase;
 use PhpWorkerPool\Dispatcher\Dispatcher;
 use PhpWorkerPool\EventLoop\EventLoop;
 use PhpWorkerPool\IPC\ConnectionClosedException;
 use PhpWorkerPool\Protocol\Message;
 use PhpWorkerPool\Protocol\MessageType;
 use PhpWorkerPool\Queue\RequestQueue;
+use PhpWorkerPool\Tests\Support\AwaitsReadyWorkers;
 use PhpWorkerPool\Worker\ForkedWorkerLauncher;
 use PhpWorkerPool\Worker\WorkerPool;
 use PhpWorkerPool\Worker\WorkerState;
-use PhpWorkerPool\Tests\Support\AwaitsReadyWorkers;
-use PHPUnit\Framework\TestCase;
 use RuntimeException;
 
 final class WorkerPoolTest extends TestCase

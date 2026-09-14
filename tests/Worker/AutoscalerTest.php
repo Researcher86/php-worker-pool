@@ -4,13 +4,13 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Tests\Worker;
 
+use PHPUnit\Framework\TestCase;
 use PhpWorkerPool\Protocol\Message;
 use PhpWorkerPool\Protocol\MessageType;
 use PhpWorkerPool\Queue\RequestQueue;
 use PhpWorkerPool\Tests\Support\FakeClock;
 use PhpWorkerPool\Worker\Autoscaler;
 use PhpWorkerPool\Worker\WorkerPool;
-use PHPUnit\Framework\TestCase;
 
 final class AutoscalerTest extends TestCase
 {

@@ -31,3 +31,6 @@ Thumbs.db
 
 # Composer
 composer.phar
+
+# Formatter state
+/.php-cs-fixer.cache

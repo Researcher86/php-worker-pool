@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Tests\Worker;
 
-use PhpWorkerPool\IPC\Socket;
-use PhpWorkerPool\Worker\WorkerProcess;
-use PhpWorkerPool\Worker\WorkerState;
 use LogicException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use PhpWorkerPool\IPC\Socket;
+use PhpWorkerPool\Worker\WorkerProcess;
+use PhpWorkerPool\Worker\WorkerState;
 
 /**
  * Every cell of WorkerProcess::TRANSITIONS, asserted from the outside.

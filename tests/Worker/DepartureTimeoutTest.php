@@ -4,13 +4,13 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Tests\Worker;
 
+use PHPUnit\Framework\TestCase;
 use PhpWorkerPool\Protocol\Message;
 use PhpWorkerPool\Protocol\MessageType;
 use PhpWorkerPool\Tests\Support\FakeClock;
 use PhpWorkerPool\Worker\WorkerPool;
 use PhpWorkerPool\Worker\WorkerProcess;
 use PhpWorkerPool\Worker\WorkerState;
-use PHPUnit\Framework\TestCase;
 
 /**
  * The third deadline in the pool, next to the execution and bootstrap ones

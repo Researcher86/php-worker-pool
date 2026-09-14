@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Tests\Metrics;
 
+use PHPUnit\Framework\TestCase;
 use PhpWorkerPool\Client\ClientConnection;
 use PhpWorkerPool\Client\PendingRequestRegistry;
 use PhpWorkerPool\IPC\Socket;
@@ -14,7 +15,6 @@ use PhpWorkerPool\Protocol\MessageType;
 use PhpWorkerPool\Queue\RequestQueue;
 use PhpWorkerPool\Tests\Worker\FakeWorkerLauncher;
 use PhpWorkerPool\Worker\WorkerPool;
-use PHPUnit\Framework\TestCase;
 
 final class MetricsCollectorTest extends TestCase
 {

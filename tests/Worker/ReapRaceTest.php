@@ -4,16 +4,16 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Tests\Worker;
 
+use PHPUnit\Framework\TestCase;
 use PhpWorkerPool\Dispatcher\Dispatcher;
 use PhpWorkerPool\EventLoop\EventLoop;
 use PhpWorkerPool\Protocol\Message;
 use PhpWorkerPool\Protocol\MessageType;
 use PhpWorkerPool\Queue\RequestQueue;
+use PhpWorkerPool\Tests\Support\AwaitsReadyWorkers;
 use PhpWorkerPool\Worker\Autoscaler;
 use PhpWorkerPool\Worker\WorkerPool;
 use PhpWorkerPool\Worker\WorkerState;
-use PhpWorkerPool\Tests\Support\AwaitsReadyWorkers;
-use PHPUnit\Framework\TestCase;
 
 /**
  * The window that async SIGCHLD opens, exercised deterministically.
@@ -116,7 +116,7 @@ final class ReapRaceTest extends TestCase
         // Work waiting, nothing idle - the autoscaler would like to grow,
         // but the pool is at maxWorkers even counting the dead one.
         $queue->enqueue(new Message(MessageType::REQUEST, 'req-3'));
-        (new Autoscaler($pool, $queue, minWorkers: 1, maxWorkers: 2, step: 2, cooldownSeconds: 0.0))->check();
+        new Autoscaler($pool, $queue, minWorkers: 1, maxWorkers: 2, step: 2, cooldownSeconds: 0.0)->check();
 
         $this->assertSame(2, $pool->count(), 'must not exceed maxWorkers by filling in for an unreaped worker');
         $this->assertNull($pool->getAvailable(), 'a DEAD worker is never dispatchable');

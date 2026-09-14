@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Worker;
 
+use LogicException;
 use PhpWorkerPool\IPC\Socket;
 use PhpWorkerPool\Protocol\Message;
-use LogicException;
 
 /**
  * Master-side handle for one worker process: its pid, its socket, its

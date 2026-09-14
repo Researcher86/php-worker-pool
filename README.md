@@ -1564,6 +1564,26 @@ By implementing the system step by step, the project explores how worker-based r
 
 ## Related Projects
 
+Part of [**php-systems-lab**](https://github.com/Researcher86/php-systems-lab),
+a collection of small educational projects on backend and systems programming
+in PHP. None of them depends on another as a package - what travels between
+them is the mechanism, read in one and reimplemented in the next.
+
+### [PHP Memory Lab](https://github.com/Researcher86/php-memory-lab)
+
+What the mechanisms in this project cost, measured. The telemetry segment
+here is its Phase 6; the socket pairs between master and worker are its
+Phase 5. It answers the questions this project takes for granted:
+
+```text
+how much does a forked worker actually cost?   → PSS and Private_Dirty, not RSS
+when does Copy-on-Write stop paying off?       → measured per write
+is shared memory faster than a socket?         → measured, and the answer is no
+```
+
+Worth reading before tuning a pool: a worker that looks like it holds 40 MiB
+in `RSS` may be holding 8 MiB of its own and sharing the rest with its master.
+
 ### [PHP Concurrency](https://github.com/Researcher86/php-concurrency)
 
 A practical collection of experiments exploring concurrency in PHP:

@@ -57,7 +57,7 @@ if ($serverPid === 0) {
     // parent below would wait out its whole readiness budget with nothing to
     // report but a timeout.
     try {
-        (new Master(socketPath: $socketPath, handler: $handler, bootstrap: $bootstrap))->run();
+        new Master(socketPath: $socketPath, handler: $handler, bootstrap: $bootstrap)->run();
     } catch (Throwable $e) {
         fwrite(STDERR, 'server: ' . $e->getMessage() . "\n");
 

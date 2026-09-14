@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Worker\Runtime;
 
+use Closure;
 use PhpWorkerPool\IPC\ConnectionClosedException;
 use PhpWorkerPool\IPC\Socket;
 use PhpWorkerPool\Protocol\Message;
@@ -15,7 +16,6 @@ use PhpWorkerPool\Protocol\Response;
 use PhpWorkerPool\Support\Logger;
 use PhpWorkerPool\Support\NullLogger;
 use PhpWorkerPool\Worker\Telemetry\TelemetrySlot;
-use Closure;
 use Throwable;
 
 /**

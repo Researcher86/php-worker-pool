@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Tests\Worker;
 
+use PHPUnit\Framework\TestCase;
 use PhpWorkerPool\Protocol\Message;
 use PhpWorkerPool\Protocol\MessageType;
 use PhpWorkerPool\Tests\Support\FakeClock;
 use PhpWorkerPool\Worker\WorkerPool;
 use PhpWorkerPool\Worker\WorkerState;
-use PHPUnit\Framework\TestCase;
 
 /**
  * The pool-side half of timeouts (PHASES.md's "optionally terminate Worker").

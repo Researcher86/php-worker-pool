@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace PhpWorkerPool\Tests\Worker;
 
-use PhpWorkerPool\Protocol\MessageType;
+use PHPUnit\Framework\TestCase;
 use PhpWorkerPool\Support\Logger;
 use PhpWorkerPool\Tests\Support\AwaitsReadyWorkers;
 use PhpWorkerPool\Tests\Support\FakeClock;
@@ -12,8 +12,6 @@ use PhpWorkerPool\Tests\Support\FileLogger;
 use PhpWorkerPool\Worker\ForkedWorkerLauncher;
 use PhpWorkerPool\Worker\WorkerPool;
 use PhpWorkerPool\Worker\WorkerState;
-use Closure;
-use PHPUnit\Framework\TestCase;
 
 /**
  * The readiness handshake: a fork is not a usable worker.
