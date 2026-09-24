@@ -45,6 +45,27 @@ final class FileLoggerTest extends TestCase
         $this->assertLessThan(strpos($contents, 'second'), strpos($contents, 'first'));
     }
 
+    public function testAnUnwritableLogFallsBackToErrorLogInsteadOfDroppingTheLine(): void
+    {
+        $fallback = sys_get_temp_dir() . '/pwp-filelogger-fallback-' . getmypid() . '-' . uniqid() . '.log';
+        ini_set('error_log', $fallback);
+
+        try {
+            // A path that cannot be opened for writing: a file's own name
+            // used as a directory. file_put_contents fails, and the line
+            // must land in the error_log fallback rather than vanish.
+            $logger = new FileLogger(sys_get_temp_dir() . '/pwp-not-a-directory-' . getmypid() . '-.log/out.log');
+            $logger->log('worker 1: ready');
+
+            $contents = (string) file_get_contents($fallback);
+            $this->assertStringContainsString('could not write to', $contents);
+            $this->assertStringContainsString('worker 1: ready', $contents);
+        } finally {
+            ini_restore('error_log');
+            @unlink($fallback);
+        }
+    }
+
     public function testConcurrentWritersDoNotInterleaveALine(): void
     {
         // The reason for LOCK_EX: fork a handful of children that each

@@ -84,15 +84,31 @@ final class BootstrapTest extends TestCase
         $this->assertStringContainsString('Could not find vendor/autoload.php', (string) $errors);
     }
 
+    public function testFailsWhenTheWalkFindsAnAutoloaderThatDoesNotMapThisPackage(): void
+    {
+        // The walk stops at the FIRST match - a layout where a higher
+        // vendor/autoload.php exists but belongs to something else (and so
+        // maps nothing of this package) must fail with the dedicated message
+        // rather than a random "class not found" at first use.
+        $this->buildTree($this->tmpDir . '/wrong-relative', bootstrapAt: 'bin', autoloadAt: '', mapPackage: false);
+
+        [$exitCode, $errors] = $this->runBootstrap($this->tmpDir . '/wrong-relative/bin/bootstrap.php');
+
+        $this->assertNotSame(0, $exitCode);
+        $this->assertStringContainsString('does not autoload this package', (string) $errors);
+    }
+
     /**
      * Builds $root/$bootstrapAt/bootstrap.php (the real file, copied) plus a
-     * fake $root/vendor/autoload.php that writes a marker file the moment
-     * PHP requires it - proof of exactly which autoloader the walk found,
-     * without needing a real Composer-generated one to make the assertion.
+     * fake $root/vendor/autoload.php that writes a marker file - and, unless
+     * $mapPackage is false, loads the package's real classes (by pulling in
+     * this repo's own vendor/autoload.php) - proof of exactly which
+     * autoloader the walk found, without needing a real Composer-generated
+     * one to make the assertion.
      *
      * @return string the marker file's path
      */
-    private function buildTree(string $root, string $bootstrapAt, string $autoloadAt): string
+    private function buildTree(string $root, string $bootstrapAt, string $autoloadAt, bool $mapPackage = true): string
     {
         $binDir = rtrim($root . '/' . $bootstrapAt, '/');
         mkdir($binDir, 0o777, true);
@@ -105,15 +121,27 @@ final class BootstrapTest extends TestCase
         }
 
         $marker = $root . '/found.marker';
+        $autoload = $mapPackage
+            ? 'require ' . var_export(dirname(__DIR__, 2) . '/vendor/autoload.php', true) . ";\n"
+            : '';
+
         file_put_contents(
             $vendorDir . '/autoload.php',
-            '<?php file_put_contents(' . var_export($marker, true) . ", 'loaded');\n",
+            '<?php ' . $autoload . 'file_put_contents(' . var_export($marker, true) . ", 'loaded');\n",
         );
 
         return $marker;
     }
 
     private function assertRequireSucceeds(string $bootstrapPath): void
+    {
+        [$exitCode, $errors] = $this->runBootstrap($bootstrapPath);
+
+        $this->assertSame(0, $exitCode, $errors);
+    }
+
+    /** @return array{int, string} */
+    private function runBootstrap(string $bootstrapPath): array
     {
         $process = proc_open(
             [PHP_BINARY, $bootstrapPath],
@@ -127,7 +155,7 @@ final class BootstrapTest extends TestCase
         fclose($pipes[2]);
         $exitCode = proc_close($process);
 
-        $this->assertSame(0, $exitCode, $errors);
+        return [$exitCode, (string) $errors];
     }
 
     private function removeTree(string $dir): void

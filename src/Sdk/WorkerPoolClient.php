@@ -100,18 +100,32 @@ final class WorkerPoolClient
      * dispatched to a worker, so it costs no pool capacity and is not
      * subject to $timeoutSeconds' request budget the way a real task is.
      *
+     * Note the currentRequestId field: that is the MASTER's own dispatch
+     * id for the in-flight request, not the id this client sent it under -
+     * a caller cannot correlate the two, and should not try.
+     *
      * @return list<array{pid: int, state: string, currentRequestId: ?string, handledRequests: int, ageSeconds: float, workingSeconds: ?float, memoryBytes: ?int}>
      *
      * @throws ConnectionFailedException  couldn't connect to the socket at all
      * @throws RequestTimedOutException   no response within $timeoutSeconds
      * @throws ServerErrorException       the server answered with an ERROR
      * @throws ConnectionClosedException  the connection dropped mid-request
-     * @throws MalformedMessageException  the response didn't parse
+     * @throws MalformedMessageException  the response didn't parse, or wasn't
+     *                                    a stats answer (an older server, say)
      */
     public function stats(): array
     {
+        $response = $this->call(new Request(Request::STATS_ACTION));
+        $workers = $response['workers'] ?? null;
+
+        if (!is_array($workers)) {
+            throw new MalformedMessageException(
+                sprintf('Expected a "%s" response with a "workers" list, got %s', Request::STATS_ACTION, json_encode($response)),
+            );
+        }
+
         /** @var list<array{pid: int, state: string, currentRequestId: ?string, handledRequests: int, ageSeconds: float, workingSeconds: ?float, memoryBytes: ?int}> */
-        return $this->call(new Request(Request::STATS_ACTION))['workers'];
+        return $workers;
     }
 
     /**

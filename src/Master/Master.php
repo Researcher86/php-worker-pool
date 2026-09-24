@@ -149,6 +149,18 @@ final class Master
     ) {
     }
 
+    /**
+     * One known-bad way to run a Master, documented because it is subtle:
+     * started as a `pcntl_fork()`ed child (a daemonize sequence in a
+     * supervisor, say) AND given a $bootstrap closure - the repository's own
+     * default - SIGTERM has been observed NOT reaching stop() reliably
+     * (the child process seemingly swallows it). Neither the fork alone,
+     * nor the bootstrap alone, reproduces it - only the combination. Root
+     * cause not isolated; see docs/DECISIONS.md "PidFile and FileLogger,
+     * without a daemon mode to use them". Treat "fork the Master with a
+     * bootstrap" as unverified until that is understood, and prefer running
+     * the Master as the process the supervisor actually started.
+     */
     public function run(): void
     {
         // Anchored next to the socket so a Master that was SIGKILLed leaves
@@ -439,9 +451,19 @@ final class Master
      * currently holds, straight from what it already tracks: no counter
      * kept twice, no journal to replay to reconstruct it externally.
      *
+     * Read-only and deliberately NOT atomic against the pool's own churn: a
+     * SIGCHLD reap can replace a worker mid-iteration, so the snapshot is
+     * "the workers present at the start of this pass" - honest-enough for
+     * an admin query, and never a torn read, since every value comes from a
+     * getter on the worker it was read from.
+     *
      * memoryBytes is null wherever WorkerPool has no WorkerMemory to ask
      * (no maxMemoryBytes configured) or the worker has not published a
      * reading yet - both honest answers, never a guess.
+     *
+     * currentRequestId is the MASTER's dispatch id for the in-flight
+     * request, assigned when it was dispatched - not the id the client sent
+     * it under, and not correlated to it.
      *
      * @return array{workers: list<array{pid: int, state: string, currentRequestId: ?string, handledRequests: int, ageSeconds: float, workingSeconds: ?float, memoryBytes: ?int}>}
      */
