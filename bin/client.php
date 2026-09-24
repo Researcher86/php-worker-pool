@@ -6,7 +6,7 @@ use PhpWorkerPool\Contract\Calculate\CalculateRequest;
 use PhpWorkerPool\Protocol\Request;
 use PhpWorkerPool\Sdk\WorkerPoolClient;
 
-require __DIR__ . '/../vendor/autoload.php';
+require __DIR__ . '/bootstrap.php';
 
 // Both ends of these calls share PhpWorkerPool\Contract\Calculate - that's what the
 // namespace is for: the caller builds the very CalculateRequest the worker

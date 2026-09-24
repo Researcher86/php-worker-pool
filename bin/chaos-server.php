@@ -10,7 +10,7 @@ use PhpWorkerPool\Protocol\Request;
 use PhpWorkerPool\Protocol\Response;
 use PhpWorkerPool\Worker\RecyclingPolicy;
 
-require __DIR__ . '/../vendor/autoload.php';
+require __DIR__ . '/bootstrap.php';
 
 /**
  * bin/server.php with the lifecycle machinery turned up to a rate a test can

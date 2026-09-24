@@ -10,7 +10,7 @@ use PhpWorkerPool\Protocol\Request;
 use PhpWorkerPool\Protocol\Response;
 use PhpWorkerPool\Support\Logger;
 
-require __DIR__ . '/../vendor/autoload.php';
+require __DIR__ . '/bootstrap.php';
 
 // WORKER_POOL_SOCKET lets a test (or a second instance) run on its own
 // socket path without editing anything; unset, the default path applies.

@@ -11,7 +11,7 @@ use PhpWorkerPool\Protocol\Response;
 use PhpWorkerPool\Sdk\WorkerPoolClient;
 use PhpWorkerPool\Support\Logger;
 
-require __DIR__ . '/../vendor/autoload.php';
+require __DIR__ . '/bootstrap.php';
 
 // A socket of this run's own, not the default path bin/server.php uses. Two
 // Masters cannot share one socket - UnixSocketServer deliberately refuses to
