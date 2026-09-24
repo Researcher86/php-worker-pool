@@ -1231,3 +1231,41 @@ a question the Master could answer from memory it already holds.
 memory (there is nothing else in it), and any HISTORY (this is one
 snapshot, "right now" - a caller wanting a trend samples `stats()` on its
 own schedule, the same way the Master's own recycling policy does).
+
+## PidFile and FileLogger, without a daemon mode to use them
+
+**Attempted:** the same `--daemon`/`--pid-file`/`--log-file` contract
+php-mini-database's own `bin/minidb-server` has, ported into
+`bin/server.php`: `pcntl_fork()` + `posix_setsid()` to detach, `PidFile` to
+refuse a second instance and let a caller stop one by pid, `FileLogger`
+since a daemonized process's STDERR is gone.
+
+**Reverted, not shipped:** with the daemonizing sequence in place AND a
+`bootstrap` closure given to `Master` (this repository's own demo always
+gives one), SIGTERM stopped reliably reaching `stop()` - confirmed
+reproducible, isolated by hand to exactly that combination:
+
+| Master run as | bootstrap given | SIGTERM → exit |
+|---|---|---|
+| the process `php` started | no | < 0.5s |
+| the process `php` started | **yes** | < 0.5s |
+| a `pcntl_fork()`ed child (no setsid, no stream changes - just the fork) | no | < 0.5s |
+| a `pcntl_fork()`ed child | **yes** | did not exit within 12s |
+
+Removing `posix_setsid()` and the STDIN/STDOUT/STDERR redirection each on
+their own made no difference - the child process being one `pcntl_fork()`
+away from the process the shell started, *combined with* a bootstrap
+closure actually being invoked, is what reproduces it. Root cause not
+isolated further within this investigation's budget: it did not point at
+signal-mask inheritance, telemetry-slot reservation, or file-descriptor
+reuse, the three most likely mechanisms checked by hand.
+
+**What stayed:** `PidFile` and `FileLogger` work correctly on their own -
+each has its own passing tests, `FileLogger`'s covering the exact
+concurrent-write safety (`LOCK_EX`) a Master's forked workers logging
+through the same file actually needs - and neither one forks anything or
+touches a controlling terminal. Kept as working, independently useful
+primitives for whatever *does* end up managing a Master as a background
+process (a systemd unit, a process supervisor, a future daemon mode that
+gets the fork/bootstrap interaction right). `bin/server.php` itself is
+unchanged.
