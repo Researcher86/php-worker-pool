@@ -1240,25 +1240,47 @@ php-mini-database's own `bin/minidb-server` has, ported into
 refuse a second instance and let a caller stop one by pid, `FileLogger`
 since a daemonized process's STDERR is gone.
 
-**Reverted, not shipped:** with the daemonizing sequence in place AND a
-`bootstrap` closure given to `Master` (this repository's own demo always
-gives one), SIGTERM stopped reliably reaching `stop()` - confirmed
-reproducible, isolated by hand to exactly that combination:
+**Reverted, not shipped - but on a misdiagnosis, corrected below.** The
+first investigation measured a daemonized Master as not exiting within the
+polling window used to observe it, tied that to giving `Master` a
+`bootstrap` closure, and wrote that up here as an unreproduced fork+signal
+bug. A later, more careful pass (prompted by the same symptom surfacing in
+an unrelated sibling component with no bootstrap-closure concept at all)
+found the real mechanism, and it has nothing to do with `bootstrap`:
 
-| Master run as | bootstrap given | SIGTERM → exit |
-|---|---|---|
-| the process `php` started | no | < 0.5s |
-| the process `php` started | **yes** | < 0.5s |
-| a `pcntl_fork()`ed child (no setsid, no stream changes - just the fork) | no | < 0.5s |
-| a `pcntl_fork()`ed child | **yes** | did not exit within 12s |
+- SIGTERM is delivered and handled **within a millisecond** of being sent -
+  confirmed with a bare `pcntl_fork()` + `posix_setsid()` +
+  `pcntl_signal(SIGTERM, ...)` script, no `Master`, no bootstrap, nothing
+  of this repository at all: the handler ran and the process reached `Z
+  (zombie)` in `/proc/<pid>/status` in under 1ms of the signal being sent.
+- It then **stayed a zombie indefinitely** (still `Z` five seconds later),
+  because this repository's dev container's PID 1 is `php` itself, not an
+  init or a process supervisor - nothing in the container ever calls
+  `wait()`/`waitpid()` on an orphan. `posix_kill($pid, 0)` (what
+  `PidFile::isProcessRunning()` uses, and what a shell's `kill -0` does too)
+  **returns true for a zombie** - the kernel still has a process-table entry
+  for it - so any liveness check built on it reports "still running"
+  forever for a process that finished and exited within a millisecond of
+  being asked to.
+- The original table's "did not exit within 12s" rows were this: the
+  process had already exited, but every observation method used to notice
+  that (`kill -0` in a polling loop) cannot distinguish a live process from
+  an unreaped zombie. It was never about `bootstrap`, `setsid`, or a signal
+  going missing - the earlier isolation matrix was measuring an artifact of
+  its own liveness check, not the thing it thought it was isolating.
 
-Removing `posix_setsid()` and the STDIN/STDOUT/STDERR redirection each on
-their own made no difference - the child process being one `pcntl_fork()`
-away from the process the shell started, *combined with* a bootstrap
-closure actually being invoked, is what reproduces it. Root cause not
-isolated further within this investigation's budget: it did not point at
-signal-mask inheritance, telemetry-slot reservation, or file-descriptor
-reuse, the three most likely mechanisms checked by hand.
+**Why this doesn't get shipped here anyway:** the underlying daemonizing
+code (fork, detach, signal handling) is correct and not the problem. The
+problem is real and belongs to the deployment shape: a double-forked
+daemon's exit is invisible to `kill -0`/`PidFile::isProcessRunning()` on
+any host without something reaping orphans (an init, `docker run --init` /
+`tini`, a process supervisor). On a normal Linux host - or this same
+container with an init added - the zombie is reaped essentially instantly
+and `isProcessRunning()` reports correctly. This repository's own dev
+container does not have one, which is exactly why the bug was reproducible
+here at all. Shipping the feature without saying so would hand a caller a
+`PidFile`-based liveness check that lies in the one environment (a bare
+container) it is most likely to be used in.
 
 **What stayed:** `PidFile` and `FileLogger` work correctly on their own -
 each has its own passing tests, `FileLogger`'s covering the exact
@@ -1266,6 +1288,5 @@ concurrent-write safety (`LOCK_EX`) a Master's forked workers logging
 through the same file actually needs - and neither one forks anything or
 touches a controlling terminal. Kept as working, independently useful
 primitives for whatever *does* end up managing a Master as a background
-process (a systemd unit, a process supervisor, a future daemon mode that
-gets the fork/bootstrap interaction right). `bin/server.php` itself is
-unchanged.
+process (a systemd unit, a process supervisor, a container run with
+`--init`). `bin/server.php` itself is unchanged.

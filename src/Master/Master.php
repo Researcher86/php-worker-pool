@@ -150,16 +150,20 @@ final class Master
     }
 
     /**
-     * One known-bad way to run a Master, documented because it is subtle:
-     * started as a `pcntl_fork()`ed child (a daemonize sequence in a
-     * supervisor, say) AND given a $bootstrap closure - the repository's own
-     * default - SIGTERM has been observed NOT reaching stop() reliably
-     * (the child process seemingly swallows it). Neither the fork alone,
-     * nor the bootstrap alone, reproduces it - only the combination. Root
-     * cause not isolated; see docs/DECISIONS.md "PidFile and FileLogger,
-     * without a daemon mode to use them". Treat "fork the Master with a
-     * bootstrap" as unverified until that is understood, and prefer running
-     * the Master as the process the supervisor actually started.
+     * A subtlety for whatever ends up starting this as a background
+     * process: run as a `pcntl_fork()`ed, `posix_setsid()`ed daemon, SIGTERM
+     * IS handled and stop() DOES run - within a millisecond, verified
+     * against this class directly. What can look like "SIGTERM does
+     * nothing" instead is the process exiting into an unreaped zombie on a
+     * host with nothing to reap it (a container whose PID 1 is not an init
+     * or supervisor): `posix_kill($pid, 0)` - what PidFile and `kill -0`
+     * both use to ask "is it still running?" - answers true for a zombie,
+     * so a liveness check built on it reports this Master as running long
+     * after it has actually exited. See docs/DECISIONS.md "PidFile and
+     * FileLogger, without a daemon mode to use them" for the full
+     * investigation. Run under something that reaps orphans (an init,
+     * `docker run --init`/`tini`, a process supervisor) if PidFile's
+     * liveness check needs to be trusted.
      */
     public function run(): void
     {
