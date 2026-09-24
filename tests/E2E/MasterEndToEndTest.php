@@ -79,6 +79,66 @@ final class MasterEndToEndTest extends TestCase
         }
     }
 
+    public function testRealServerAnswersAStatsRequest(): void
+    {
+        $socketPath = sys_get_temp_dir() . '/pwp-e2e-stats-' . getmypid() . '.sock';
+
+        $process = proc_open(
+            [PHP_BINARY, __DIR__ . '/../../bin/server.php'],
+            [1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+            $pipes,
+            null,
+            ['WORKER_POOL_SOCKET' => $socketPath]
+        );
+        $this->assertIsResource($process);
+
+        try {
+            $client = new WorkerPoolClient($socketPath, timeoutSeconds: 5.0);
+
+            // One real request first, so at least one worker has something
+            // to report besides "never handled anything".
+            $this->callOnceServerIsUp($client);
+
+            $stats = $client->stats();
+
+            // The default pool: minWorkers workers, forked before this
+            // client ever connected.
+            $this->assertGreaterThanOrEqual(2, count($stats));
+
+            $handledInTotal = 0;
+
+            foreach ($stats as $worker) {
+                $this->assertArrayHasKey('pid', $worker);
+                $this->assertArrayHasKey('state', $worker);
+                $this->assertArrayHasKey('handledRequests', $worker);
+                $this->assertArrayHasKey('ageSeconds', $worker);
+                $this->assertGreaterThan(0, $worker['pid']);
+                $this->assertGreaterThanOrEqual(0.0, $worker['ageSeconds']);
+
+                $handledInTotal += $worker['handledRequests'];
+            }
+
+            // The warm-up request landed on exactly one of them.
+            $this->assertSame(1, $handledInTotal);
+
+            proc_terminate($process, SIGTERM);
+            $this->assertTrue($this->waitForExit($process, 15.0), 'server did not exit after SIGTERM');
+        } finally {
+            if (proc_get_status($process)['running']) {
+                proc_terminate($process, SIGKILL);
+            }
+
+            foreach ($pipes as $pipe) {
+                if (is_resource($pipe)) {
+                    fclose($pipe);
+                }
+            }
+
+            proc_close($process);
+            @unlink($socketPath);
+        }
+    }
+
     /**
      * The server binds its socket asynchronously to this test - retry the
      * first call until it's accepting, bounded so a server that never comes

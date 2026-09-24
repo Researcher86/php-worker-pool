@@ -33,6 +33,15 @@ namespace PhpWorkerPool\Protocol;
  */
 final readonly class Request
 {
+    /**
+     * The one action name applications may not use for their own work: the
+     * Master answers it directly, from its own bookkeeping, without ever
+     * reaching a worker - see Master::handleClientRequest(). Reserved here,
+     * next to $action itself, so both the Master and WorkerPoolClient::
+     * stats() reference the same string instead of each spelling it out.
+     */
+    public const string STATS_ACTION = '_stats';
+
     public string $action;
 
     /** @var array<string, mixed> */

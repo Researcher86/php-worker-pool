@@ -90,6 +90,31 @@ final class WorkerPoolClient
     }
 
     /**
+     * One row per worker the pool currently holds - pid, state, how many
+     * requests it has handled, its age, how long it has been on its current
+     * request (null when idle), and its own reported memory use (null if
+     * the pool has no WorkerMemory configured, or that worker has not
+     * published a reading yet).
+     *
+     * Answered by the Master directly, from its own bookkeeping - never
+     * dispatched to a worker, so it costs no pool capacity and is not
+     * subject to $timeoutSeconds' request budget the way a real task is.
+     *
+     * @return list<array{pid: int, state: string, currentRequestId: ?string, handledRequests: int, ageSeconds: float, workingSeconds: ?float, memoryBytes: ?int}>
+     *
+     * @throws ConnectionFailedException  couldn't connect to the socket at all
+     * @throws RequestTimedOutException   no response within $timeoutSeconds
+     * @throws ServerErrorException       the server answered with an ERROR
+     * @throws ConnectionClosedException  the connection dropped mid-request
+     * @throws MalformedMessageException  the response didn't parse
+     */
+    public function stats(): array
+    {
+        /** @var list<array{pid: int, state: string, currentRequestId: ?string, handledRequests: int, ageSeconds: float, workingSeconds: ?float, memoryBytes: ?int}> */
+        return $this->call(new Request(Request::STATS_ACTION))['workers'];
+    }
+
+    /**
      * Writes one Request out and returns immediately with a handle to
      * collect its answer later - the way to have several requests running
      * in the pool at the same time.

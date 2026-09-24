@@ -1182,3 +1182,52 @@ someone who cannot tell whether the number or the pool is wrong.
 workers reach the 128 MiB the `php:8.5-cli` image gives CLI by default and
 crash mid-run, reporting an incomplete result - which CI would have read as
 a pass with a warning rather than a failure.
+
+## A stats action, answered by the Master itself
+
+**Chosen:** `Request::STATS_ACTION` (`'_stats'`) is a reserved action name
+`Master::handleClientRequest()` intercepts before the normal dispatch path -
+answered directly from `WorkerPool::all()` and `WorkerPool::getMemory()`,
+never sent to a worker. `WorkerPoolClient::stats()` is the client-side
+convenience over it.
+
+**Rejected:** leaving worker observability where it was - internal to
+`WorkerPool`/`WorkerProcess`, readable only from inside the Master's own
+process.
+
+**Why now:** every number this answers with already existed -
+`WorkerProcess::getPid()/getState()/getCurrentRequestId()/
+getHandledRequests()/getAgeSeconds()/getWorkingSeconds()`, and
+`WorkerMemory::measure()` (see "Worker telemetry over shared memory" above)
+- tracked for the pool's *own* purposes (recycling, the departure timeout,
+the execution timeout) with no way for a caller outside the Master process
+to read any of it. A caller that wanted to know how many workers were busy,
+or how much memory one was using, had no option but to reconstruct a proxy
+for it externally - a real gap, found while a downstream project
+([php-systems-platform](https://github.com/Researcher86/php-systems-platform))
+was doing exactly that: watching a *different* process (its own
+`php-job-queue` forwarders) and calling that "worker lifecycle" because the
+real pool had nothing to ask, and inventing a whole custom task
+(`memory.hold`) just to have a worker report its own pid and memory back.
+
+**Why a reserved action name, not a new `MessageType`:** the wire already
+has a REQUEST/RESPONSE round trip that works, correlates, and times out
+correctly; a stats query is not a new kind of MESSAGE, it is an
+application-shaped question the Master itself can answer instead of a
+worker - so it stays inside the existing envelope. `Request::STATS_ACTION`
+is `readonly public const string`, not a private implementation detail
+either end reinvents, since both `Master` and `WorkerPoolClient` need the
+identical string.
+
+**Why it skips `$requestMetrics` and never touches the worker queue:** those
+metrics count application throughput - answered, failed, timed out,
+rejected, in flight (see "The request counters were four numbers, not a
+partition" above). A stats query is not application work; counting it
+there would make throughput numbers include a caller just asking what time
+it is, and routing it through the pool would cost a worker slot to answer
+a question the Master could answer from memory it already holds.
+
+**What was deliberately left out:** anything from `SharedTelemetry` beyond
+memory (there is nothing else in it), and any HISTORY (this is one
+snapshot, "right now" - a caller wanting a trend samples `stats()` on its
+own schedule, the same way the Master's own recycling policy does).

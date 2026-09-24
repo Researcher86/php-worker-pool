@@ -16,6 +16,7 @@ use PhpWorkerPool\Metrics\RequestMetrics;
 use PhpWorkerPool\Protocol\MalformedMessageException;
 use PhpWorkerPool\Protocol\Message;
 use PhpWorkerPool\Protocol\MessageType;
+use PhpWorkerPool\Protocol\Request;
 use PhpWorkerPool\Queue\RequestQueue;
 use PhpWorkerPool\Server\UnixSocketServer;
 use PhpWorkerPool\Support\Clock;
@@ -413,6 +414,16 @@ final class Master
             ));
         }
 
+        // Answered directly from the Master's own bookkeeping, never
+        // dispatched to a worker - see workerStats(). Skips
+        // $requestMetrics too: those count application throughput, and this
+        // is an out-of-band admin query, not application work.
+        if (($request->payload['action'] ?? null) === Request::STATS_ACTION) {
+            $client->write(new Message(MessageType::RESPONSE, $request->id, $this->workerStats()));
+
+            return;
+        }
+
         $this->requestMetrics->recordReceived();
 
         $dispatchId = $this->pendingRequests->register($client, $request->id, $this->requestTimeoutSeconds);
@@ -421,6 +432,38 @@ final class Master
             $this->pendingRequests->resolve($dispatchId); // never actually dispatched - nothing to route a response to later
             $client->write(new Message(MessageType::ERROR, $request->id, ['error' => 'server_overloaded']));
         }
+    }
+
+    /**
+     * The answer to Request::STATS_ACTION - one row per worker the pool
+     * currently holds, straight from what it already tracks: no counter
+     * kept twice, no journal to replay to reconstruct it externally.
+     *
+     * memoryBytes is null wherever WorkerPool has no WorkerMemory to ask
+     * (no maxMemoryBytes configured) or the worker has not published a
+     * reading yet - both honest answers, never a guess.
+     *
+     * @return array{workers: list<array{pid: int, state: string, currentRequestId: ?string, handledRequests: int, ageSeconds: float, workingSeconds: ?float, memoryBytes: ?int}>}
+     */
+    private function workerStats(): array
+    {
+        $now = $this->clock->now();
+        $memory = $this->pool->getMemory();
+        $workers = [];
+
+        foreach ($this->pool->all() as $worker) {
+            $workers[] = [
+                'pid' => $worker->getPid(),
+                'state' => $worker->getState()->name,
+                'currentRequestId' => $worker->getCurrentRequestId(),
+                'handledRequests' => $worker->getHandledRequests(),
+                'ageSeconds' => $worker->getAgeSeconds($now),
+                'workingSeconds' => $worker->getWorkingSeconds($now),
+                'memoryBytes' => $memory?->measure($worker->getPid()),
+            ];
+        }
+
+        return ['workers' => $workers];
     }
 
     /**

@@ -134,6 +134,13 @@ through to its answer.
       └──────────────────────────────────────────────────────────────────┘
 
 
+      ┌ action === Request::STATS_ACTION? ───────────────────────────────┐
+      │  Answered here, straight from WorkerPool::all()/getMemory() -      │
+      │  no pending-request entry, no worker, no requestMetrics. See       │
+      │  DECISIONS.md "A stats action, answered by the Master itself".     │
+      └──────────────────────────────────────────────────────────────────┘
+
+
   ④  MASTER: register the pending request
   ─────────────────────────────────────────────────────────────────────────
       requestMetrics->recordReceived()               requests_total++

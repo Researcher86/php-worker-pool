@@ -137,6 +137,12 @@ $b = $client->send(new Request('calculate', new CalculateRequest(a: 3, b: 4)));
 // fan-in on a budget: take what answered within 2s total, skip the rest
 $answers = $client->allWithin(2.0, $a, $b);
 $page['orders'] = $answers[0] ?? null;   // present = answered, missing = didn't
+
+// one row per worker, from the Master's own bookkeeping - no task spent
+foreach ($client->stats() as $worker) {
+    printf("worker %d: %s, %d handled, %s bytes\n",
+        $worker['pid'], $worker['state'], $worker['handledRequests'], $worker['memoryBytes'] ?? 'unknown');
+}
 ```
 
 Requests are typed at both ends: the payload is hydrated into the DTO the
@@ -191,6 +197,7 @@ three sharp edges, and the file is mostly those:
 | **Readiness handshake** | a forked worker warms up first and reports READY; nothing is dispatched to it until it does |
 | **Worker recycling** | replaced after N requests / an age / a memory ceiling - drained, never killed mid-request |
 | **Worker telemetry** | each worker publishes its own memory use into shared memory - a pull-only side channel, no messages, no fd |
+| **Stats over the wire** | `client->stats()` reads pid/state/handled/age/memory per worker straight from the Master, no task spent |
 | **Graceful shutdown** | SIGTERM drains in-flight work within one budget, then force-stops |
 | **Graceful reload** | SIGHUP swaps the whole generation without dropping a connection |
 | **Autoscaling** | grows on queue pressure, shrinks when idle |

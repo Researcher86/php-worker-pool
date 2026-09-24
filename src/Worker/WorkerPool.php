@@ -232,6 +232,18 @@ final class WorkerPool
     }
 
     /**
+     * Whoever can measure a worker's own memory, or null if nothing was
+     * given one to. The pool never reads it itself outside
+     * recycleExhaustedWorkers() - this is for a caller elsewhere (Master's
+     * own stats action) that wants the same number without duplicating how
+     * to obtain it.
+     */
+    public function getMemory(): ?WorkerMemory
+    {
+        return $this->memory;
+    }
+
+    /**
      * Dispatches $message to $workerId, or returns null if that worker can
      * no longer take it: with async SIGCHLD, a worker can be reaped (or
      * drained) between the caller's getAvailable() and this call -
