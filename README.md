@@ -1,5 +1,7 @@
 # PHP Worker Pool
 
+**[🧪 PHP Systems Lab](https://github.com/Researcher86/php-systems-lab)** · Level 3 of 8 · ← [`php-concurrency`](https://github.com/Researcher86/php-concurrency) · [`php-job-queue`](https://github.com/Researcher86/php-job-queue) →
+
 > A production-inspired multi-process Worker Pool for PHP: persistent worker processes, IPC over socket pairs, a Unix domain socket front door, and a single-threaded event-driven Master.
 
 A **PHP runtime engineering playground**: one small, readable
@@ -1569,18 +1571,35 @@ By implementing the system step by step, the project explores how worker-based r
 
 ---
 
-## Related Projects
+## PHP Systems Lab
 
-Part of [**php-systems-lab**](https://github.com/Researcher86/php-systems-lab),
-a collection of small educational projects on backend and systems programming
-in PHP. None of them depends on another as a package - what travels between
-them is the mechanism, read in one and reimplemented in the next.
+This project is part of [**PHP Systems Lab**](https://github.com/Researcher86/php-systems-lab) — a collection of small
+educational PHP projects that rebuild the mechanisms behind backend
+infrastructure in order to understand them. The recommended order:
 
-### [PHP Memory Lab](https://github.com/Researcher86/php-memory-lab)
+| Level | Project | Focus |
+| ----- | ------- | ----- |
+| 1 | 🧠 [`php-memory-lab`](https://github.com/Researcher86/php-memory-lab) | memory, RSS, fork, copy-on-write, `mmap`, shared memory, FFI |
+| 2 | ⚡ [`php-concurrency`](https://github.com/Researcher86/php-concurrency) | processes, IPC, concurrency patterns, event loops, Fibers (course in Russian) |
+| **3** | ⚙️ **`php-worker-pool`** (this project) | **persistent master/worker pool, supervision, graceful shutdown** |
+| 4 | 📬 [`php-job-queue`](https://github.com/Researcher86/php-job-queue) | reliable background jobs: delivery leases, ACK, retries, DLQ |
+| 5 | 💾 [`php-mini-cache`](https://github.com/Researcher86/php-mini-cache) | event-driven in-memory server: RESP, pipelining, TTL, Pub/Sub |
+| 6 | 🌐 [`php-mini-http-server`](https://github.com/Researcher86/php-mini-http-server) | event-driven HTTP server: parsing, routing, middleware, keep-alive |
+| 7 | 🗄️ [`php-mini-database`](https://github.com/Researcher86/php-mini-database) | relational engine: pages, B-trees, SQL, transactions, WAL, recovery |
+| 8 | 🏗️ [`php-systems-platform`](https://github.com/Researcher86/php-systems-platform) | integration of the components into one backend platform |
 
-What the mechanisms in this project cost, measured. The telemetry segment
-here is its Phase 6; the socket pairs between master and worker are its
-Phase 5. It answers the questions this project takes for granted:
+These are teaching projects, not libraries: a mechanism travels between them
+by being read in one and reimplemented in the next. Levels 1–7 do not depend
+on each other as packages. Only [`php-systems-platform`](https://github.com/Researcher86/php-systems-platform) requires the
+five components (worker pool, job queue, cache, HTTP server, database)
+through Composer and runs them together as one system.
+
+### How this project relates
+
+**[`php-memory-lab`](https://github.com/Researcher86/php-memory-lab)** — what the mechanisms in this project cost,
+measured. The telemetry segment here is its Phase 6; the socket pairs between
+master and worker are its Phase 5. It answers the questions this project
+takes for granted:
 
 ```text
 how much does a forked worker actually cost?   → PSS and Private_Dirty, not RSS
@@ -1591,28 +1610,23 @@ is shared memory faster than a socket?         → measured, and the answer is n
 Worth reading before tuning a pool: a worker that looks like it holds 40 MiB
 in `RSS` may be holding 8 MiB of its own and sharing the rest with its master.
 
-### [PHP Concurrency](https://github.com/Researcher86/php-concurrency)
-
-A practical collection of experiments exploring concurrency in PHP:
+**[`php-concurrency`](https://github.com/Researcher86/php-concurrency)** — lessons 06, 12 and 30–32 are compact
+prototypes of what this project turns into a working runtime:
 
 ```text
-Processes
-    ↓
-IPC
-    ↓
-Worker Pools
-    ↓
-Supervision
-    ↓
-Reliability
-    ↓
-Event Loops
-    ↓
-Fibers & Async I/O
+Processes → IPC → Worker Pools → Supervision → Reliability → Event Loops → Fibers & Async I/O
 ```
+
+**[`php-job-queue`](https://github.com/Researcher86/php-job-queue)** — the other half of the problem. This pool is
+at-most-once by design (see [`docs/FAILURE-MODEL.md`](docs/FAILURE-MODEL.md)):
+worker lifecycle is not job lifecycle, and what happens to the *work* when a
+worker dies is what the job queue answers.
+
+**[`php-systems-platform`](https://github.com/Researcher86/php-systems-platform)** — runs this pool as its worker tier
+(`src/Workers/`, through the `WorkerPoolClient` SDK).
 
 ---
 
 ## License
 
-MIT
+MIT.

@@ -10,15 +10,15 @@ declare(strict_types=1);
  * here used to open with - only resolves while this repository IS the
  * Composer root: `bin/` is one level below the project root, so `../vendor`
  * is exactly right. The moment this package is installed as a dependency
- * (`vendor/tanat/php-worker-pool/`), that same relative path points at THIS
+ * (`vendor/researcher86/php-worker-pool/`), that same relative path points at THIS
  * package's own `vendor/` - which a dependency never has one of - and the
  * script fatals before it does anything.
  *
  * The fix is to walk upward from this file's own directory until a
  * `vendor/autoload.php` actually exists. Run from the project root, that
  * finds this package's own autoloader on the very first try - unchanged
- * behavior. Run from inside `vendor/tanat/php-worker-pool/bin/`, the first
- * few levels (this package's own empty `vendor/`, then `vendor/tanat/`,
+ * behavior. Run from inside `vendor/researcher86/php-worker-pool/bin/`, the first
+ * few levels (this package's own empty `vendor/`, then `vendor/researcher86/`,
  * then `vendor/`) all miss, and the walk lands on the CONSUMING project's
  * autoloader - which is what actually has this package's classes loaded
  * into it, via Composer's own merged autoload map.

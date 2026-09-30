@@ -1,5 +1,5 @@
 {
-    "name": "tanat/php-worker-pool",
+    "name": "researcher86/php-worker-pool",
     "type": "project",
     "license": "MIT",
     "autoload": {
