@@ -10,19 +10,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: shivammathur/setup-php@v2
-        with:
-          php-version: '8.5'
-          # shmop too: composer.json requires it (worker telemetry lives in
-          # a shared-memory segment), and without it `composer install`
-          # refuses the platform outright.
-          extensions: pcntl, posix, shmop
-          coverage: none
+      # The same Docker image and the same make targets as local development:
+      # CI checks the environment the project is actually developed in.
+      - run: make build
 
-      - run: composer install --no-interaction --no-progress
+      - run: make install
 
-      - run: composer test
+      - run: make test
 
-      - run: composer analyse
+      - run: make analyse
 
-      - run: composer format:check
+      - run: make format-check
+
+      - if: always()
+        run: make down
