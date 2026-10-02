@@ -53,9 +53,8 @@ final class ClientRegistry
         callable $onRequest,
         ?callable $onDisconnect = null,
     ) {
-        $this->onRequest = Closure::fromCallable($onRequest);
-        $this->onDisconnect = Closure::fromCallable($onDisconnect ?? static function (ClientConnection $client): void {
-        });
+        $this->onRequest = $onRequest(...);
+        $this->onDisconnect = $onDisconnect === null ? static fn (ClientConnection $client) => null : $onDisconnect(...);
     }
 
     public function count(): int

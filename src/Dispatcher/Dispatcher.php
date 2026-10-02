@@ -69,9 +69,8 @@ final class Dispatcher
         // which nothing else can observe from outside this class.
         ?callable $onDispatched = null,
     ) {
-        $this->onResponse = Closure::fromCallable($onResponse);
-        $this->onDispatched = Closure::fromCallable($onDispatched ?? static function (string $id): void {
-        });
+        $this->onResponse = $onResponse(...);
+        $this->onDispatched = $onDispatched === null ? static fn (string $id) => null : $onDispatched(...);
     }
 
     /**

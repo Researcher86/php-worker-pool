@@ -54,7 +54,7 @@ final readonly class UnixSocketServer
         // process's own group is.
         private ?string $group = null,
     ) {
-        $this->onConnect = Closure::fromCallable($onConnect);
+        $this->onConnect = $onConnect(...);
 
         $this->removeStaleSocketFile();
 
