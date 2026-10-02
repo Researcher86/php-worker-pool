@@ -140,7 +140,7 @@ docker compose exec php php bin/bench.php --clients=8 --requests=500
 For the worker-count table, run the server with a fixed pool
 (`new Master(minWorkers: N, maxWorkers: N, ...)`) so the autoscaler doesn't
 move the target mid-measurement, and disable recycling
-(`RecyclingPolicy::disabled()`) so no worker is replaced during a run.
+(`new RecyclingPolicy()`, every limit null) so no worker is replaced during a run.
 
 ---
 

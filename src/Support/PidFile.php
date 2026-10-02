@@ -80,10 +80,6 @@ final readonly class PidFile
             return false;
         }
 
-        if (!function_exists('posix_kill')) {
-            return false;
-        }
-
         if (@posix_kill($pid, 0)) {
             return true;
         }

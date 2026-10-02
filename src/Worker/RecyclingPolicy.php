@@ -34,12 +34,6 @@ final readonly class RecyclingPolicy
     ) {
     }
 
-    /** A policy that never recycles - the default, so nothing changes unless asked. */
-    public static function disabled(): self
-    {
-        return new self();
-    }
-
     public function isEnabled(): bool
     {
         return $this->maxRequests !== null

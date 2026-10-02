@@ -3,9 +3,7 @@
 declare(strict_types=1);
 
 use PhpWorkerPool\Protocol\Request;
-use PhpWorkerPool\Sdk\ServerErrorException;
 use PhpWorkerPool\Sdk\WorkerPoolClient;
-use RuntimeException;
 
 require __DIR__ . '/bootstrap.php';
 
@@ -94,7 +92,7 @@ for ($c = 0; $c < $clients; $c++) {
                         $latencies[] = $each;
                     }
                 }
-            } catch (ServerErrorException | RuntimeException) {
+            } catch (RuntimeException) { // every SDK failure, ServerErrorException included
                 $failed += $batch;
             }
         }
