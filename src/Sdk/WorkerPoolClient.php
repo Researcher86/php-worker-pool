@@ -345,10 +345,12 @@ final class WorkerPoolClient
 
         try {
             $messages = $this->connection()->readAvailable($remaining);
-        } catch (ConnectionClosedException $e) {
+        } catch (ConnectionClosedException | MalformedMessageException $e) {
             // Nothing still on the wire can arrive now, and the socket is
-            // no longer usable - clear it all rather than leave handles that
-            // could only ever block.
+            // no longer usable - a dropped peer and a frame that doesn't
+            // parse (the decoder is desynced for good) mean the same thing
+            // here. Clear it all rather than leave handles that could only
+            // ever block.
             $this->close();
 
             throw $e;

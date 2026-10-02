@@ -8,6 +8,7 @@ use Closure;
 use LogicException;
 use PHPUnit\Framework\TestCase;
 use PhpWorkerPool\IPC\Socket;
+use PhpWorkerPool\Protocol\MalformedMessageException;
 use PhpWorkerPool\Protocol\Message;
 use PhpWorkerPool\Protocol\MessageType;
 use PhpWorkerPool\Protocol\Request;
@@ -450,6 +451,41 @@ final class WorkerPoolClientTest extends TestCase
         $this->assertSame(['ok' => true], $working->await(), 'the other request must be unaffected');
 
         pcntl_waitpid($pid, $status);
+    }
+
+    /**
+     * A frame that doesn't parse leaves the decoder mid-desync: nothing
+     * after it on that socket can be trusted, exactly like a dropped
+     * connection. The client must give the connection up the same way -
+     * not leave the other handles blocking until their timeouts on a
+     * stream that can never produce them.
+     */
+    public function testAMalformedResponseDropsTheConnectionLikeAClosedOne(): void
+    {
+        $this->forkSilentlyIncompleteServer(2, function (Socket $socket, array $requests): void {
+            $garbage = 'not json';
+            fwrite($socket->getResource(), pack('N', strlen($garbage)) . $garbage);
+        });
+
+        $client = new WorkerPoolClient($this->path, timeoutSeconds: 2.0);
+
+        $first = $client->send(new Request('calculate', ['a' => 1, 'b' => 2]));
+        $second = $client->send(new Request('calculate', ['a' => 3, 'b' => 4]));
+
+        try {
+            $first->await();
+            $this->fail('a malformed frame must surface as MalformedMessageException');
+        } catch (MalformedMessageException) {
+        }
+
+        $startedAt = microtime(true);
+
+        try {
+            $second->await();
+            $this->fail('a handle on a dropped connection must not be awaitable');
+        } catch (LogicException) {
+            $this->assertLessThan(1.0, microtime(true) - $startedAt, 'must fail fast, not wait out the timeout');
+        }
     }
 
     public function testConnectionFailureThrowsConnectionFailedException(): void
