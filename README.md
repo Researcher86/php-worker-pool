@@ -83,8 +83,8 @@ its workers - they all share a command line.
 
 ## Using it
 
-The server decides what requests mean. That lives in `bin/server.php`, not
-in the runtime:
+The server decides what requests mean. That lives in `bin/handler.php`
+(loaded by `bin/server.php` and the other demo servers), not in the runtime:
 
 ```php
 $handler = static function (Request $request): Response {

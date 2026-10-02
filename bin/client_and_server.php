@@ -2,12 +2,9 @@
 
 declare(strict_types=1);
 
-use PhpWorkerPool\Contract\Calculate\CalculateAction;
 use PhpWorkerPool\Contract\Calculate\CalculateRequest;
 use PhpWorkerPool\Master\Master;
-use PhpWorkerPool\Protocol\PayloadHydrator;
 use PhpWorkerPool\Protocol\Request;
-use PhpWorkerPool\Protocol\Response;
 use PhpWorkerPool\Sdk\WorkerPoolClient;
 use PhpWorkerPool\Support\Logger;
 
@@ -29,15 +26,7 @@ if ($serverPid === -1) {
 }
 
 if ($serverPid === 0) {
-    $handler = static function (Request $request): Response {
-        return match ($request->action) {
-            'calculate' => Response::of(new CalculateAction()(PayloadHydrator::hydrate(CalculateRequest::class, $request->params))),
-            // An unrecognized action is a real failure, not an empty answer: the
-            // client gets an ERROR and the SDK throws ServerErrorException whose
-            // ->error is exactly this code.
-            default => Response::error('unknown_action'),
-        };
-    };
+    $handler = require __DIR__ . '/handler.php';
 
     // The per-worker warm-up, stubbed: it runs inside each forked worker,
     // before that worker reports READY, and nothing is dispatched to a

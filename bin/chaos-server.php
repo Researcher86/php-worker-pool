@@ -2,12 +2,7 @@
 
 declare(strict_types=1);
 
-use PhpWorkerPool\Contract\Calculate\CalculateAction;
-use PhpWorkerPool\Contract\Calculate\CalculateRequest;
 use PhpWorkerPool\Master\Master;
-use PhpWorkerPool\Protocol\PayloadHydrator;
-use PhpWorkerPool\Protocol\Request;
-use PhpWorkerPool\Protocol\Response;
 use PhpWorkerPool\Worker\RecyclingPolicy;
 
 require __DIR__ . '/bootstrap.php';
@@ -21,13 +16,6 @@ require __DIR__ . '/bootstrap.php';
  */
 $socketPath = getenv('WORKER_POOL_SOCKET');
 
-$handler = static fn (Request $request): Response => match ($request->action) {
-    'calculate' => Response::of((new CalculateAction())(
-        PayloadHydrator::hydrate(CalculateRequest::class, $request->params)
-    )),
-    default => Response::error('unknown_action'),
-};
-
 new Master(
     socketPath: $socketPath !== false && $socketPath !== '' ? $socketPath : '/tmp/php-worker-pool-chaos.sock',
     minWorkers: 2,
@@ -35,5 +23,5 @@ new Master(
     requestTimeoutSeconds: 10.0,
     workerExecutionTimeoutSeconds: 15.0,
     recycling: new RecyclingPolicy(maxRequests: 7),
-    handler: $handler,
+    handler: require __DIR__ . '/handler.php',
 )->run();
