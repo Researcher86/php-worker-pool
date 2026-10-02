@@ -322,9 +322,8 @@ final class Master
         pcntl_signal(SIGTERM, $this->stop(...));
 
         // PHASES.md Phase 15 - 'C': a worker can die on its own (crash,
-        // OOM-kill, ...) without ever touching its socket; an idle one is
-        // invisible to Dispatcher's read-based detection (it only watches
-        // busy workers). SIGCHLD catches it either way -> reapCrashedWorkers().
+        // OOM-kill, ...) without the Dispatcher's read side ever being the
+        // first to notice. SIGCHLD catches it either way -> reapCrashedWorkers().
         pcntl_signal(SIGCHLD, fn () => @fwrite($this->signalWrite, 'C'));
 
         // PHASES.md Phase 19 - 'H': replace every worker with a fresh one
@@ -344,8 +343,7 @@ final class Master
      * accumulated and act on each distinct one once. Coalescing repeats is
      * deliberate - five SIGCHLDs still need only one reap pass (it drains
      * every zombie in one go), and reload() is already a no-op while one is
-     * in progress. On an interrupted (EINTR) tick every registered handler
-     * runs regardless of readiness, so an empty read here is normal.
+     * in progress. An empty read is harmless and simply ignored.
      */
     private function drainSignalPipe(): void
     {
@@ -383,7 +381,7 @@ final class Master
 
             if ($pending !== null) {
                 $this->requestMetrics->recordFailed();
-                $pending->client->write(new Message(MessageType::ERROR, $pending->originalId, ['error' => 'worker_crashed']));
+                $this->answerWithError($pending, 'worker_crashed');
             }
         }
     }
@@ -609,7 +607,7 @@ final class Master
         // still holding some of these anyway).
         foreach ($this->pendingRequests->drainAll() as $stillPending) {
             $this->requestMetrics->recordFailed();
-            $stillPending->client->write(new Message(MessageType::ERROR, $stillPending->originalId, ['error' => 'server_shutting_down']));
+            $this->answerWithError($stillPending, 'server_shutting_down');
         }
 
         // Client writes are buffered and only leave the process inside
@@ -627,8 +625,14 @@ final class Master
     private function sendTimeouts(): void
     {
         foreach ($this->pendingRequests->removeExpired($this->clock->now()) as $expired) {
-            $expired->client->write(new Message(MessageType::ERROR, $expired->originalId, ['error' => 'request_timeout']));
+            $this->answerWithError($expired, 'request_timeout');
         }
+    }
+
+    /** Answers $pending's client with an ERROR under the id that client sent it with. */
+    private function answerWithError(PendingRequest $pending, string $error): void
+    {
+        $pending->client->write(new Message(MessageType::ERROR, $pending->originalId, ['error' => $error]));
     }
 
     private function stop(): void
