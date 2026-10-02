@@ -30,7 +30,6 @@ final class MessageDecoder
      *
      * @return list<Message>
      *
-     * @throws JsonException
      * @throws MalformedMessageException
      */
     public function decode(string $data): array
@@ -67,10 +66,7 @@ final class MessageDecoder
         return $messages;
     }
 
-    /**
-     * @throws JsonException
-     * @throws MalformedMessageException
-     */
+    /** @throws MalformedMessageException */
     private function parse(string $payload): Message
     {
         try {

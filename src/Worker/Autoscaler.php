@@ -17,9 +17,7 @@ use PhpWorkerPool\Support\SystemClock;
  * load) via state already cheap to read: RequestQueue::size() and
  * WorkerPool's busy/idle counts (Phase 17). "Worker Utilization" and
  * "Request Latency" are listed there only as other *possible* signals, not
- * required ones - latency in particular would need per-request timing this
- * codebase deliberately doesn't track anywhere yet (see Phase 17's own
- * scope notes on request_duration).
+ * required ones.
  *
  * Meant to be polled periodically (Master calls check() once per tick,
  * alongside its other per-tick sweeps) rather than triggered by an event.

@@ -19,7 +19,8 @@ use PhpWorkerPool\Support\SystemClock;
  * sees this internal id - resolve() hands back its original one so the
  * response can go out under the id the client is actually expecting.
  *
- * Deliberately holds just id => (client, original id, deadline) - PHASES.md's
+ * Deliberately holds just id => PendingRequest (client, original id, deadline,
+ * timestamps) - PHASES.md's
  * Phase 11 sketch also lists Worker per entry, but nothing so far needs it
  * (WorkerProcess already knows its own current request id). Add it when
  * something actually needs it, not before.

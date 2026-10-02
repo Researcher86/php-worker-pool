@@ -13,13 +13,13 @@ namespace PhpWorkerPool\Protocol;
  *         default     => Response::error('unknown_action'),
  *     };
  *
- * A handler may still return a bare array or DTO - the runtime wraps it (see
- * HandlerAdapter) - but returning a Response is what makes the FAILURE case
- * expressible: until now the only way for a handler to fail a request was to
- * throw, which reports handler_failed and says nothing about what was
- * actually wrong. Response::error() answers the client with an ERROR message
- * carrying a code the application chose, which WorkerPoolClient turns back
- * into a ServerErrorException whose ->error is that same code.
+ * A handler must return a Response (anything else is reported as
+ * handler_failed, see WorkerRunner), and that is what makes the FAILURE case
+ * expressible: throwing reports handler_failed and says nothing about what
+ * was actually wrong, while Response::error() answers the client with an
+ * ERROR message carrying a code the application chose, which
+ * WorkerPoolClient turns back into a ServerErrorException whose ->error is
+ * that same code.
  *
  * $successful is deliberately a bool rather than a Protocol\MessageType:
  * application code shouldn't have to know the wire protocol's vocabulary -
@@ -62,5 +62,4 @@ final readonly class Response
     {
         return new self(['error' => $error] + $details, successful: false);
     }
-
 }

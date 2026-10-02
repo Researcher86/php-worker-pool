@@ -6,11 +6,8 @@ namespace PhpWorkerPool\Metrics;
 
 /**
  * A point-in-time snapshot of the Worker Pool's observable state
- * (PHASES.md Phase 17). Deliberately doesn't cover the "Performance Metrics"
- * (request_duration, worker_processing_time) - both need timestamps this
- * codebase doesn't track anywhere yet (when a request was queued, when a
- * worker actually started on it), and nothing currently needs them enough
- * to justify adding that bookkeeping. Add them when something does.
+ * (PHASES.md Phase 17): worker and request counters, plus the latency
+ * breakdown (queue wait / execution / end-to-end) RequestMetrics records.
  */
 final readonly class Metrics
 {

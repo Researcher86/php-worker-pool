@@ -136,6 +136,9 @@ final class WorkerProcess
     // "this worker is not going".
     private ?float $leavingSince = null;
 
+    // Set when WE signalled this worker - see markTerminating().
+    private bool $terminating = false;
+
     public function __construct(
         private readonly int $pid,
         private readonly Socket $socket,
@@ -146,8 +149,6 @@ final class WorkerProcess
         private ?string $currentRequestId = null,
     ) {
     }
-
-    private bool $terminating = false;
 
     /** How many requests this worker has completed since it was forked. */
     public function getHandledRequests(): int
@@ -240,10 +241,7 @@ final class WorkerProcess
         return $this->currentRequestId !== null;
     }
 
-    /**
-     * Marks the worker as busy with the given request, then returns
-     * IDLE once the request has finished.
-     */
+    /** Marks the worker as busy with $requestId until finishRequest(). */
     public function beginRequest(string $requestId, ?float $now = null): void
     {
         $this->apply('dispatch');
