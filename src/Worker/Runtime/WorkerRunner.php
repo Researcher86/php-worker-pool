@@ -179,7 +179,7 @@ final readonly class WorkerRunner
         $this->slot?->publish(memory_get_usage(true), microtime(true));
     }
 
-    public function close(): void
+    private function close(): void
     {
         $this->socket->close();
     }
