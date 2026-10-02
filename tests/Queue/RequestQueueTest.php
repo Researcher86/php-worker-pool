@@ -44,6 +44,18 @@ final class RequestQueueTest extends TestCase
         $this->assertTrue($this->queue->isEmpty());
     }
 
+    /** A request that couldn't be handed to a worker keeps its place in line. */
+    public function testRequeuePutsTheRequestBackAtTheFront(): void
+    {
+        $this->queue->enqueue(new Message(MessageType::REQUEST, 'req-1'));
+        $this->queue->enqueue(new Message(MessageType::REQUEST, 'req-2'));
+
+        $this->queue->requeue($this->queue->dequeue());
+
+        $this->assertSame('req-1', $this->queue->dequeue()->id);
+        $this->assertSame('req-2', $this->queue->dequeue()->id);
+    }
+
     public function testIsNeverFullWithoutAConfiguredLimit(): void
     {
         for ($i = 0; $i < 100; $i++) {

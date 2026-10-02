@@ -250,10 +250,11 @@ final class Dispatcher
 
             if ($worker === null) {
                 // The worker vanished between getAvailable() and write()
-                // (reaped by an async SIGCHLD in between). Requeue and go
-                // around - the next getAvailable() no longer sees it, so
-                // this can't loop on the same worker.
-                $this->queue->enqueue($request);
+                // (reaped by an async SIGCHLD in between). Put it back at
+                // the head of the line and go around - the next
+                // getAvailable() no longer sees it, so this can't loop on
+                // the same worker.
+                $this->queue->requeue($request);
 
                 continue;
             }

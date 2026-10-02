@@ -40,6 +40,16 @@ final class RequestQueue
         $this->queue->enqueue($message);
     }
 
+    /**
+     * Puts a just-dequeued request back at the FRONT - it was next in line
+     * and still is. Enqueueing it again would send it to the back, behind
+     * everything that arrived after it.
+     */
+    public function requeue(Message $message): void
+    {
+        $this->queue->unshift($message);
+    }
+
     public function dequeue(): Message
     {
         return $this->queue->dequeue();
