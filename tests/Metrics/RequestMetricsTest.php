@@ -13,9 +13,9 @@ final class RequestMetricsTest extends TestCase
     {
         $metrics = new RequestMetrics();
 
-        $this->assertSame(0, $metrics->total());
-        $this->assertSame(0, $metrics->completed());
-        $this->assertSame(0, $metrics->failed());
+        $this->assertSame(0, $metrics->total);
+        $this->assertSame(0, $metrics->completed);
+        $this->assertSame(0, $metrics->failed);
     }
 
     public function testEachRecordMethodTracksItsOwnCounterIndependently(): void
@@ -31,8 +31,8 @@ final class RequestMetricsTest extends TestCase
         $metrics->recordFailed();
         $metrics->recordFailed();
 
-        $this->assertSame(3, $metrics->total());
-        $this->assertSame(1, $metrics->completed());
-        $this->assertSame(2, $metrics->failed());
+        $this->assertSame(3, $metrics->total);
+        $this->assertSame(1, $metrics->completed);
+        $this->assertSame(2, $metrics->failed);
     }
 }

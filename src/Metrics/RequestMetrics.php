@@ -16,26 +16,21 @@ namespace PhpWorkerPool\Metrics;
  */
 final class RequestMetrics
 {
-    private int $total = 0;
+    public private(set) int $total = 0;
 
-    private int $completed = 0;
+    public private(set) int $completed = 0;
 
-    private int $failed = 0;
+    public private(set) int $failed = 0;
 
-    // PHASES.md Phase 17's two remaining metrics, plus the end-to-end figure
-    // they add up to. Separate on purpose: a p99 of 10s means something very
-    // different depending on whether it was spent queued or executing.
-    public private(set) DurationStat $queueWait;
-
-    public private(set) DurationStat $execution;
-
-    public private(set) DurationStat $endToEnd;
-
-    public function __construct()
-    {
-        $this->queueWait = new DurationStat();
-        $this->execution = new DurationStat();
-        $this->endToEnd = new DurationStat();
+    public function __construct(
+        // PHASES.md Phase 17's two remaining metrics, plus the end-to-end
+        // figure they add up to. Separate on purpose: a p99 of 10s means
+        // something very different depending on whether it was spent queued
+        // or executing.
+        public readonly DurationStat $queueWait = new DurationStat(),
+        public readonly DurationStat $execution = new DurationStat(),
+        public readonly DurationStat $endToEnd = new DurationStat(),
+    ) {
     }
 
     public function recordReceived(): void
@@ -51,20 +46,5 @@ final class RequestMetrics
     public function recordFailed(): void
     {
         $this->failed++;
-    }
-
-    public function total(): int
-    {
-        return $this->total;
-    }
-
-    public function completed(): int
-    {
-        return $this->completed;
-    }
-
-    public function failed(): int
-    {
-        return $this->failed;
     }
 }
