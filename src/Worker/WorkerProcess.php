@@ -277,8 +277,7 @@ final class WorkerProcess
         // BUSY -> IDLE, DRAINING -> DRAINING: see the table.
         $this->apply('respond');
 
-        $this->currentRequestId = null;
-        $this->requestStartedAt = null;
+        $this->clearRequest();
         $this->handledRequests++;
     }
 
@@ -302,10 +301,7 @@ final class WorkerProcess
     public function drain(?float $now = null): void
     {
         $this->apply('drain');
-
-        if ($now !== null) {
-            $this->leavingSince ??= $now;
-        }
+        $this->markLeaving($now);
     }
 
     public function isDraining(): bool
@@ -324,19 +320,25 @@ final class WorkerProcess
     public function stop(?float $now = null): void
     {
         $this->apply('stop');
-
-        if ($now !== null) {
-            $this->leavingSince ??= $now;
-        }
-
-        $this->currentRequestId = null;
-        $this->requestStartedAt = null;
+        $this->markLeaving($now);
+        $this->clearRequest();
     }
 
     public function markDead(): void
     {
         $this->apply('die');
+        $this->clearRequest();
+    }
 
+    private function markLeaving(?float $now): void
+    {
+        if ($now !== null) {
+            $this->leavingSince ??= $now;
+        }
+    }
+
+    private function clearRequest(): void
+    {
         $this->currentRequestId = null;
         $this->requestStartedAt = null;
     }

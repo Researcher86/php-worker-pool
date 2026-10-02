@@ -160,15 +160,10 @@ final class WorkerPool
      */
     public function countActive(): int
     {
-        $active = 0;
-
-        foreach ($this->workers as $worker) {
-            if (!in_array($worker->getState(), [WorkerState::DRAINING, WorkerState::STOPPING, WorkerState::DEAD], true)) {
-                $active++;
-            }
-        }
-
-        return $active;
+        return count(array_filter(
+            $this->workers,
+            static fn (WorkerProcess $w) => !in_array($w->getState(), [WorkerState::DRAINING, WorkerState::STOPPING, WorkerState::DEAD], true),
+        ));
     }
 
     public function totalCrashed(): int
