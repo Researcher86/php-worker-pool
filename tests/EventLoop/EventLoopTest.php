@@ -157,4 +157,46 @@ final class EventLoopTest extends TestCase
         $this->assertGreaterThanOrEqual(0.2, $elapsed);
         $this->assertLessThan(2.0, $elapsed); // generous upper bound, just proving it didn't block forever
     }
+
+    /**
+     * The signal window (see EventLoop::$signalsDuringWait): a signal the
+     * owner keeps blocked is delivered only while tick() waits in
+     * stream_select() - and blocked again by the time tick() returns, so
+     * the handler never runs in the middle of the owner's own code.
+     */
+    public function testSignalsAreDeliveredOnlyWhileTickWaits(): void
+    {
+        $previousHandler = pcntl_signal_get_handler(SIGUSR2);
+        $previousAsync = pcntl_async_signals(true);
+        $delivered = 0;
+
+        pcntl_signal(SIGUSR2, function () use (&$delivered): void {
+            $delivered++;
+        });
+        // After pcntl_signal(), which unblocks the signal it installs.
+        pcntl_sigprocmask(SIG_BLOCK, [SIGUSR2], $previousMask);
+
+        try {
+            $loop = new EventLoop(signalsDuringWait: [SIGUSR2]);
+            [$a, $b] = $this->pair();
+            $loop->addReadable($a, static function (): void {
+            });
+
+            posix_kill(posix_getpid(), SIGUSR2);
+            $this->assertSame(0, $delivered, 'blocked outside the wait: held pending, not delivered');
+
+            $loop->tick(0.0);
+            $this->assertSame(1, $delivered, 'the wait is where a pending signal is delivered');
+
+            posix_kill(posix_getpid(), SIGUSR2);
+            $this->assertSame(1, $delivered, 'and once tick() returns, the signal is blocked again');
+
+            $loop->tick(0.0);
+            $this->assertSame(2, $delivered);
+        } finally {
+            pcntl_sigprocmask(SIG_SETMASK, $previousMask);
+            pcntl_signal(SIGUSR2, $previousHandler);
+            pcntl_async_signals($previousAsync);
+        }
+    }
 }

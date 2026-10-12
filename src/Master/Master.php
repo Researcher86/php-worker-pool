@@ -48,6 +48,10 @@ final class Master
     private const int TELEMETRY_SLOTS_PER_WORKER = 2;
     private const int MAX_TELEMETRY_SLOTS = 1024;
 
+    // Every signal registerSignalHandling() installs a handler for - the
+    // set run() keeps blocked until those handlers exist.
+    private const array HANDLED_SIGNALS = [SIGINT, SIGTERM, SIGCHLD, SIGHUP, SIGUSR1];
+
     private bool $running = true;
 
     // Wired in run() and alive for that one run()'s duration. Properties
@@ -167,67 +171,94 @@ final class Master
      */
     public function run(): void
     {
-        // Anchored next to the socket so a Master that was SIGKILLed leaves
-        // a segment its successor can find and remove.
-        $telemetry = SharedTelemetry::openAt(
-            $this->socketPath . '.telemetry',
-            min($this->maxWorkers * self::TELEMETRY_SLOTS_PER_WORKER, self::MAX_TELEMETRY_SLOTS),
-        );
+        // Every signal registerSignalHandling() is about to catch is held
+        // back until it has: SIGTERM, SIGINT and SIGHUP all TERMINATE a
+        // process by default, and from here to the handlers there are forks,
+        // a shared memory segment and a socket file - a shutdown signal in
+        // that window used to kill the Master outright, leaving all three
+        // behind. Blocked, a signal is not lost, only held pending by the
+        // kernel until a handler exists to receive it. (pcntl_signal() itself
+        // unblocks the signal it installs, so each one is in fact delivered
+        // the moment its own handler goes in; the restore in `finally` is
+        // what covers a startup that throws first.) Workers forked meanwhile
+        // inherit the mask, and ForkedWorkerLauncher resets both handlers and
+        // mask in the child. See docs/DECISIONS.md "Signals during startup,
+        // and pipes nobody reads".
+        pcntl_sigprocmask(SIG_BLOCK, self::HANDLED_SIGNALS, $previousMask);
 
         try {
-            $this->pool = new WorkerPool(
-                $this->minWorkers,
-                new ForkedWorkerLauncher($this->handler, $telemetry, $this->bootstrap, $this->logger),
-                maxWorkers: $this->maxWorkers,
-                logger: $this->logger,
-                recycling: $this->recycling,
-                memory: new ShmWorkerMemory($telemetry),
-                clock: $this->clock,
+            // Anchored next to the socket so a Master that was SIGKILLed
+            // leaves a segment its successor can find and remove.
+            $telemetry = SharedTelemetry::openAt(
+                $this->socketPath . '.telemetry',
+                min($this->maxWorkers * self::TELEMETRY_SLOTS_PER_WORKER, self::MAX_TELEMETRY_SLOTS),
             );
-        } catch (Throwable $e) {
-            // The pool failing to launch (a fork that didn't) is the one
-            // path out of run() that happens before the try/finally below
-            // exists - and a segment is kernel-persistent, so without this
-            // it would outlive the process that never even started.
-            $telemetry->destroy();
 
-            throw $e;
+            try {
+                $this->pool = new WorkerPool(
+                    $this->minWorkers,
+                    new ForkedWorkerLauncher($this->handler, $telemetry, $this->bootstrap, $this->logger),
+                    maxWorkers: $this->maxWorkers,
+                    logger: $this->logger,
+                    recycling: $this->recycling,
+                    memory: new ShmWorkerMemory($telemetry),
+                    clock: $this->clock,
+                );
+            } catch (Throwable $e) {
+                // The pool failing to launch (a fork that didn't) is the
+                // one path out of run() that happens before the try/finally
+                // below exists - and a segment is kernel-persistent, so
+                // without this it would outlive the process that never even
+                // started.
+                $telemetry->destroy();
+
+                throw $e;
+            }
+            $this->loop = new EventLoop();
+            $this->pendingRequests = new PendingRequestRegistry($this->clock);
+            $this->requestMetrics = new RequestMetrics();
+
+            $queue = new RequestQueue($this->maxQueueSize);
+            $this->metrics = new MetricsCollector($this->pool, $queue, $this->pendingRequests, $this->requestMetrics);
+            $autoscaler = new Autoscaler($this->pool, $queue, $this->minWorkers, $this->maxWorkers, clock: $this->clock);
+
+            $this->dispatcher = new Dispatcher(
+                $queue,
+                $this->pool,
+                $this->loop,
+                $this->routeResponse(...),
+                // Stamps the queue/execution boundary - the Dispatcher is the
+                // only place that knows when a request stopped waiting for
+                // capacity and started being worked on.
+                fn (string $id) => $this->pendingRequests->markDispatched($id, $this->clock->now()),
+            );
+            $this->clients = new ClientRegistry($this->loop, $this->handleClientRequest(...), $this->handleClientDisconnect(...));
+            $server = new UnixSocketServer(
+                $this->socketPath,
+                $this->loop,
+                $this->clients->accept(...),
+                $this->socketMode,
+                $this->socketGroup,
+            );
+
+            $this->registerSignalHandling();
+        } finally {
+            // On success: the handlers exist and anything held pending has
+            // run - a SIGTERM that arrived mid-startup has cleared $running
+            // before the loop is ever entered. On failure: the caller gets
+            // its own mask back rather than one with signals it never asked
+            // to block.
+            pcntl_sigprocmask(SIG_SETMASK, $previousMask);
         }
-        $this->loop = new EventLoop();
-        $this->pendingRequests = new PendingRequestRegistry($this->clock);
-        $this->requestMetrics = new RequestMetrics();
-
-        $queue = new RequestQueue($this->maxQueueSize);
-        $this->metrics = new MetricsCollector($this->pool, $queue, $this->pendingRequests, $this->requestMetrics);
-        $autoscaler = new Autoscaler($this->pool, $queue, $this->minWorkers, $this->maxWorkers, clock: $this->clock);
-
-        $this->dispatcher = new Dispatcher(
-            $queue,
-            $this->pool,
-            $this->loop,
-            $this->routeResponse(...),
-            // Stamps the queue/execution boundary - the Dispatcher is the
-            // only place that knows when a request stopped waiting for
-            // capacity and started being worked on.
-            fn (string $id) => $this->pendingRequests->markDispatched($id, $this->clock->now()),
-        );
-        $this->clients = new ClientRegistry($this->loop, $this->handleClientRequest(...), $this->handleClientDisconnect(...));
-        $server = new UnixSocketServer(
-            $this->socketPath,
-            $this->loop,
-            $this->clients->accept(...),
-            $this->socketMode,
-            $this->socketGroup,
-        );
-
-        $this->registerSignalHandling();
 
         $remaining = 0.0;
 
         try {
             // Accept client connections until a shutdown signal arrives. The
-            // blocking stream_select() inside tick() returns early on a caught
-            // signal (EINTR), which lets the loop check the flag and exit -
+            // blocking stream_select() inside tick() returns early on a
+            // signal - interrupted (EINTR) if it lands during the wait, or
+            // woken by the self-pipe byte its handler writes if it landed
+            // just before it - which lets the loop check the flag and exit;
             // and, regardless of a signal, at least once every
             // TIMEOUT_CHECK_INTERVAL_SECONDS, which is what lets requests
             // past their deadline actually get noticed.
@@ -297,8 +328,22 @@ final class Master
      * construction; everything else now runs where the rest of the code
      * already runs.
      *
-     * SIGINT/SIGTERM stay a plain flag: setting one bool is just as safe,
-     * and the main loop checks it right after the tick the signal interrupts.
+     * SIGINT/SIGTERM go through the pipe too ('T'), but for a different
+     * reason: there is no work to move out of the handler - stop() setting
+     * one bool is just as safe - only a wake-up to deliver. The flag alone
+     * relied on the signal interrupting stream_select(), and one that
+     * arrived after `while ($this->running)` was checked but before the
+     * select began (the rest of tick() is ordinary PHP code, where an async
+     * handler runs at once) set the flag and then sat out a full
+     * TIMEOUT_CHECK_INTERVAL_SECONDS before anything looked at it. A byte in
+     * the pipe makes that select return immediately.
+     *
+     * What this cannot close: PHP runs a handler between VM instructions,
+     * never inside a C function - so a signal landing in the last few
+     * instructions of C code before the select() syscall itself has its
+     * handler, and so its byte, deferred until select returns. A true fix
+     * needs pselect()/signalfd(), neither of which PHP exposes; the
+     * remaining window is microseconds wide and still bounded by the tick.
      */
     private function registerSignalHandling(): void
     {
@@ -316,8 +361,9 @@ final class Master
 
         pcntl_async_signals(true);
 
-        // Catch SIGINT/SIGTERM so the socket file is removed and workers are
-        // reaped on shutdown instead of leaving a stale socket behind.
+        // 'T': catch SIGINT/SIGTERM so the socket file is removed and
+        // workers are reaped on shutdown instead of leaving a stale socket
+        // behind - see stop() for why it sets a flag AND writes a byte.
         pcntl_signal(SIGINT, $this->stop(...));
         pcntl_signal(SIGTERM, $this->stop(...));
 
@@ -358,6 +404,9 @@ final class Master
                 'C' => $this->reapCrashedWorkers(),
                 'H' => $this->pool->reload(),
                 'U' => $this->dumpMetrics(),
+                // stop() already cleared $running from the handler itself -
+                // the byte's whole job was waking the select, and it has.
+                'T' => null,
                 default => null,
             };
         }
@@ -635,8 +684,17 @@ final class Master
         $pending->client->write(new Message(MessageType::ERROR, $pending->originalId, ['error' => $error]));
     }
 
+    /**
+     * The SIGINT/SIGTERM handler. The flag is set right here, not left to
+     * drainSignalPipe(): the pipe is non-blocking, so a byte that finds it
+     * full (a storm of SIGCHLDs nobody has drained yet) is dropped - fine
+     * for a wake-up, which the bytes already in the pipe deliver anyway, but
+     * not for the shutdown itself, which must never be lost.
+     */
     private function stop(): void
     {
         $this->running = false;
+
+        @fwrite($this->signalWrite, 'T');
     }
 }

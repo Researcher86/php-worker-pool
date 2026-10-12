@@ -35,7 +35,7 @@ final class InvariantsTest extends TestCase
     /** @var resource|null */
     private mixed $process = null;
 
-    /** @var array<int, resource> the Master's stdout/stderr - stdout is where its SIGUSR1 metrics dump lands */
+    /** @var array<int, resource> the Master's stdout - where its SIGUSR1 metrics dump lands */
     private array $pipes = [];
 
     private string $socketPath = '';
@@ -73,7 +73,12 @@ final class InvariantsTest extends TestCase
 
         $process = proc_open(
             [PHP_BINARY, __DIR__ . '/../../bin/' . $handlerScript],
-            [1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+            // stdout is a pipe because dumpMetrics() reads it, and it only
+            // ever carries those dumps. stderr is the log, which nothing
+            // here reads, so it doesn't go to a pipe at all - see
+            // MasterEndToEndTest::DISCARD_OUTPUT for why an undrained one
+            // is a hazard.
+            [1 => ['pipe', 'w'], 2 => ['file', '/dev/null', 'w']],
             $pipes,
             null,
             ['WORKER_POOL_SOCKET' => $this->socketPath]
@@ -87,7 +92,6 @@ final class InvariantsTest extends TestCase
         // blocking read on a Master that hasn't answered SIGUSR1 yet would
         // hang the test instead of failing it.
         stream_set_blocking($pipes[1], false);
-        stream_set_blocking($pipes[2], false);
 
         $client = new WorkerPoolClient($this->socketPath, timeoutSeconds: 15.0);
         $deadline = microtime(true) + 10.0;

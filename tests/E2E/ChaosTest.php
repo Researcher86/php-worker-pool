@@ -60,7 +60,13 @@ final class ChaosTest extends TestCase
 
         $process = proc_open(
             [PHP_BINARY, __DIR__ . '/../../bin/server.php'],
-            [1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+            // Nothing here reads the server's output, so none of it goes to
+            // a pipe - see MasterEndToEndTest::DISCARD_OUTPUT for why an
+            // undrained one is a hazard. (These pipes used to be closed as
+            // soon as $pipes went out of scope below, which only worked
+            // because PHP's CLI ignores SIGPIPE: the Master's log writes
+            // failed with EPIPE instead of killing it.)
+            [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']],
             $pipes,
             null,
             ['WORKER_POOL_SOCKET' => $this->socketPath]

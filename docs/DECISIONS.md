@@ -30,6 +30,7 @@ how a request flows through it today, see
 - [Zombie processes after the test suite](#zombie-processes-after-the-test-suite)
 - [Where the code ended up, and why](#where-the-code-ended-up-and-why)
 - [Four holes a review found at the edges](#four-holes-a-review-found-at-the-edges)
+- [Signals during startup, and pipes nobody reads](#signals-during-startup-and-pipes-nobody-reads)
 
 ## The decisions themselves
 
@@ -50,6 +51,9 @@ one a reader is most likely to act on by mistake.
 | Request timeout and worker execution timeout are separate limits | current, [why](#execution-timeout-and-testing-the-signal-races) |
 | Handlers run only when `stream_select()` reports readiness (EINTR returns early) | current, [why](#execution-timeout-and-testing-the-signal-races) |
 | Signals write one byte to a self-pipe; the work happens in the main loop | current, [why](#hardening-the-edges-peers-signals-and-races) |
+| Every handled signal is blocked from the top of `Master::run()` until its handler exists | current, [why](#signals-during-startup-and-pipes-nobody-reads) |
+| SIGINT/SIGTERM set the shutdown flag in the handler AND write `'T'` to the self-pipe to wake the select | current, [why](#signals-during-startup-and-pipes-nobody-reads) |
+| `StderrLogger` writes blocking; draining STDERR is the launcher's job | current, [why](#signals-during-startup-and-pipes-nobody-reads) |
 | `WorkerPool` alone owns lifecycle transitions, and stays whole | current, [why](#failure-semantics-and-invariant-tests) |
 | The state machine is one declarative table, asserted cell by cell | current, [why](#failure-semantics-and-invariant-tests) |
 | Delivery is at-most-once; the runtime never retries on its own | current, [why](#failure-semantics-and-invariant-tests) |
@@ -642,7 +646,11 @@ The tempting fix is `init: true` on the compose service, which gives it a
 real init that reaps. That was tried and rejected: it makes the symptom
 disappear without removing the cause, and the cause was two ordinary bugs in
 the tests - which matter on their own, since CI runs the suite with no
-container at all.
+container at all. *(Superseded: CI has since moved into the same Docker
+image and `make` targets as local development - see
+`.github/workflows/ci.yml` - which strengthens the point rather than
+weakening it: CI's container has no init either, so an orphan there is a
+zombie for the rest of the job.)*
 
 **The end-to-end tests SIGKILLed the Master in teardown.** Killing the
 Master outright orphans every worker it forked: they exit on EOF, but their
@@ -1290,3 +1298,124 @@ touches a controlling terminal. Kept as working, independently useful
 primitives for whatever *does* end up managing a Master as a background
 process (a systemd unit, a process supervisor, a container run with
 `--init`). `bin/server.php` itself is unchanged.
+
+---
+
+# Signals during startup, and pipes nobody reads
+
+Reported symptom: on CI the Master sometimes "misses" the first SIGTERM,
+and the platform has to send it again. A review of `Master::run()` turned
+up three candidate causes. One was a real bug, one a real but much smaller
+delay, and the third a hazard that - measured - these tests never actually
+reach.
+
+## A shutdown signal during startup killed the Master outright
+
+`run()` created the telemetry segment, forked the first workers and bound
+the socket, and only then called `registerSignalHandling()`. Until that
+call SIGTERM, SIGINT and SIGHUP all had their default action - terminate -
+so one arriving in that window killed the Master on the spot, leaving the
+workers orphaned, the shared memory segment stranded and (had it got that
+far) the socket file behind. Not "missed": dead, with nothing cleaned up.
+
+**Chosen:** `run()` blocks every signal it is about to handle
+(`Master::HANDLED_SIGNALS`) with `pcntl_sigprocmask()` before it creates
+anything, and restores the caller's mask in a `finally` once the handlers
+exist. A blocked signal is not lost - the kernel holds it pending - so a
+SIGTERM sent mid-startup is acted on the moment there is something to act
+on it: `$running` is already false when the loop is reached, and the
+Master goes straight to its ordinary shutdown.
+
+**Rejected:** moving `registerSignalHandling()` above the forks. The
+handlers close over the pool, the loop and the self-pipe, so they would
+have had to exist in a half-built Master - and the children forked after
+that would have inherited them. Blocking keeps run()'s order as it was and
+needs nothing new to be safe to call early.
+
+**What the workers inherit.** A fork made while signals are blocked
+copies the mask; `ForkedWorkerLauncher` already resets the child to
+`SIG_DFL` and an empty mask before the worker loop (written for
+WorkerPool's own SIGCHLD-deferred sections), so startup's workers come up
+exactly like later ones. Found while testing that: on PHP 8.5,
+`pcntl_signal()` itself unblocks the signal it installs - so in the Master
+each pending signal is in fact delivered as its own handler goes in, and in
+a worker the `SIG_DFL` reset alone already clears SIGTERM from the mask.
+The explicit restore and `SIG_SETMASK` are kept: one covers a startup that
+throws, the other every signal the resets don't name.
+
+**The test** (`tests/Master/MasterSignalTest.php`) does not race a kill
+against startup from outside. `WorkerPool` stamps a freshly launched worker
+with `Clock::now()` from inside its constructor - squarely inside the window
+- so a Clock that signals its own process on the first reading
+(`SignalOnFirstCallClock`) lands the signal at exactly that point on every
+run. Before the fix SIGTERM and SIGINT left the forked Master dead by
+signal, and SIGHUP killed it too; after it, the first two exit 0 with the
+socket and the segment's anchor gone, and SIGHUP is just a reload.
+
+## A shutdown flag nobody was woken to read
+
+SIGINT/SIGTERM used to set `$running = false` and nothing else, relying on
+the signal interrupting `stream_select()` (EINTR) to get the loop to look
+at it. One that arrived after `while ($this->running)` was checked but
+before the select started - the rest of `EventLoop::tick()` is ordinary PHP
+code, where an async handler runs at once - set the flag and then waited
+out a full `TIMEOUT_CHECK_INTERVAL_SECONDS` (1s) before anything read it.
+
+**Chosen:** the handler still sets the flag, and now also writes `'T'` to
+the same self-pipe SIGCHLD, SIGHUP and SIGUSR1 already use, so the select
+that would have slept returns immediately. The flag stays in the handler
+rather than moving to `drainSignalPipe()`: the pipe is non-blocking and a
+byte that finds it full is dropped - fine for a wake-up, never for the
+shutdown itself.
+
+**What this cannot close:** PHP runs a signal handler between VM
+instructions, never inside a C function. A signal that lands in the last
+few instructions of C code before the `select()` syscall has its handler -
+and so its byte - deferred until select returns. Closing that needs
+`pselect()` or `signalfd()`, neither of which PHP exposes; what is left is
+microseconds wide and still bounded by the 1s tick.
+
+No test for this one: the window is a few PHP statements inside `tick()`
+with no seam to stop in, and a timing test that usually lands in it would
+be a flaky test about flakiness. The E2E shutdown tests exercise the path.
+
+## Pipes nobody reads
+
+The E2E tests started the server with `proc_open()` and stdout/stderr
+pipes. `MasterEndToEndTest` and `InvariantsTest` kept theirs open and never
+read stderr. A pipe nobody drains holds 64KB; past that, every log line
+the Master writes blocks it - and a PHP signal handler doesn't run inside a
+blocked `fwrite()`, so the Master looks exactly like one ignoring SIGTERM.
+
+**Measured, before changing anything:** the largest stderr any E2E test
+produced was 1.2KB, chaos and recycling included. So this was a hazard, not
+the CI symptom. (`ChaosTest`'s pipes were in fact closed as soon as
+`startServer()` returned and `$pipes` went out of scope; that only worked
+because PHP's CLI ignores SIGPIPE, so the Master's log writes failed with
+EPIPE rather than killing it.)
+
+**Chosen:** output nothing asserts on goes to `/dev/null` instead of a
+pipe; `InvariantsTest` keeps stdout as a pipe because `dumpMetrics()` reads
+it, and stdout carries nothing but those dumps.
+
+**Not changed: `StderrLogger` stays blocking.** Making STDERR non-blocking
+changes the file description it shares with every other process on the
+same terminal or pipe, and turns a slow reader into silently dropped log
+lines. Draining STDERR is the job of whatever launched the Master; one that
+can't should give it a `FileLogger`.
+
+**Not changed: worker socket pairs stay blocking.** The Master writes to a
+worker only when it is idle (one request) or leaving (one SHUTDOWN), and
+reads it only when `stream_select()` reports it readable - a frame is far
+smaller than a socket buffer, so the write path doesn't block in practice.
+Making the Master's end non-blocking would change `Socket::write()`'s
+contract under every worker write to fix a stall nothing has shown.
+
+## Not fixed here
+
+If `UnixSocketServer` fails to bind (path in use, a permission that cannot
+be applied), `run()` throws after the pool has forked and before the
+`try/finally` that stops it exists: the workers are left to notice EOF and
+exit as orphans nobody reaps, and the segment stays until the next Master
+on that path reclaims it. A separate bug from the signal window, noted rather than
+widened into this change.

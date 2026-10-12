@@ -92,7 +92,10 @@ final readonly class ForkedWorkerLauncher implements WorkerLauncher
 
             // The signal MASK is inherited too - a worker forked from inside
             // one of WorkerPool's SIGCHLD-deferred sections (a scale-up, a
-            // reload wave) would otherwise start life with SIGCHLD blocked.
+            // reload wave) would otherwise start life with SIGCHLD blocked,
+            // and one forked during Master::run()'s startup with SIGTERM
+            // blocked as well. (On PHP 8.5 the pcntl_signal() calls above
+            // already unblock the signals they reset; this clears the rest.)
             pcntl_sigprocmask(SIG_SETMASK, []);
 
             $socketPair->closeMaster();

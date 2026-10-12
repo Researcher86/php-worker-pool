@@ -1,4 +1,4 @@
-.PHONY: up down shell build install test analyse bench format format-check run-server run-server-debug run-client run-client-debug run-example
+.PHONY: up down shell htop build install test analyse bench format format-check run-server run-server-debug run-client run-client-debug run-example
 
 # CI has no terminal to attach to (GitHub Actions sets CI=true), so exec runs
 # without one there; locally it keeps the TTY for colours and interactive use.

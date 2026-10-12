@@ -256,11 +256,23 @@ Following a single request through all of them instead:
 
 ## Development
 
+Everything runs inside the Docker container; each target starts it first
+if it isn't already up.
+
 ```bash
-make test        # PHPUnit
-make analyse     # PHPStan level 6
-make shell       # a shell in the container
+make build         # build the image
+make install       # composer install
+make test          # PHPUnit
+make analyse       # PHPStan level 6
+make format        # php-cs-fixer: fix in place
+make format-check  # php-cs-fixer: report only, fail on a diff
+make shell         # a shell in the container
+make htop          # htop in the container - watch the master and its workers
+make up / down     # start / stop the container
 ```
+
+CI runs `build`, `install`, `test`, `analyse` and `format-check` - the
+same targets, in the same image.
 
 Debugging is opt-in, so a run doesn't have a master plus N workers all
 reaching for a debugger that isn't there:

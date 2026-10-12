@@ -19,13 +19,21 @@ use PhpWorkerPool\Sdk\WorkerPoolClient;
  */
 final class MasterEndToEndTest extends TestCase
 {
+    // Nothing here reads the server's output, so none of it goes to a pipe:
+    // one nobody drains fills at 64KB, and from then on every line the
+    // Master logs blocks it - a stalled Master that looks exactly like one
+    // ignoring SIGTERM. These tests log far less than that today; this keeps
+    // it from mattering the day they don't. See docs/DECISIONS.md "Signals
+    // during startup, and pipes nobody reads".
+    private const array DISCARD_OUTPUT = [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']];
+
     public function testRealServerAnswersARequestAndShutsDownGracefully(): void
     {
         $socketPath = sys_get_temp_dir() . '/pwp-e2e-' . getmypid() . '.sock';
 
         $process = proc_open(
             [PHP_BINARY, __DIR__ . '/../../bin/server.php'],
-            [1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+            self::DISCARD_OUTPUT,
             $pipes,
             null,
             ['WORKER_POOL_SOCKET' => $socketPath]
@@ -68,12 +76,6 @@ final class MasterEndToEndTest extends TestCase
                 proc_terminate($process, SIGKILL);
             }
 
-            foreach ($pipes as $pipe) {
-                if (is_resource($pipe)) {
-                    fclose($pipe);
-                }
-            }
-
             proc_close($process);
             @unlink($socketPath);
         }
@@ -85,7 +87,7 @@ final class MasterEndToEndTest extends TestCase
 
         $process = proc_open(
             [PHP_BINARY, __DIR__ . '/../../bin/server.php'],
-            [1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+            self::DISCARD_OUTPUT,
             $pipes,
             null,
             ['WORKER_POOL_SOCKET' => $socketPath]
@@ -126,12 +128,6 @@ final class MasterEndToEndTest extends TestCase
         } finally {
             if (proc_get_status($process)['running']) {
                 proc_terminate($process, SIGKILL);
-            }
-
-            foreach ($pipes as $pipe) {
-                if (is_resource($pipe)) {
-                    fclose($pipe);
-                }
             }
 
             proc_close($process);
