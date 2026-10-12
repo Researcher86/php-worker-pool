@@ -32,6 +32,28 @@ final class EventLoop
     private array $writeHandlers = [];
 
     /**
+     * Signals the OWNER keeps blocked everywhere else, opened only for the
+     * duration of the stream_select() wait in tick() - a pselect() built
+     * from the parts PHP exposes. Empty (the default) leaves the mask alone.
+     *
+     * The reason is how PHP runs a signal handler: between two VM
+     * instructions of whatever code is executing, and if that code is
+     * mid-throw - an exception on its way to its catch - the handler is
+     * silently not called at all, and every other signal queued with it is
+     * discarded too (pcntl_signal_dispatch() gives up on a pending
+     * exception). Inside the wait nothing is throwing, so a signal taken
+     * there is never lost; one sent at any other moment simply stays
+     * pending in the kernel until the next wait. See docs/DECISIONS.md
+     * "Signals during startup, and pipes nobody reads".
+     *
+     * @param list<int> $signalsDuringWait
+     */
+    public function __construct(
+        private readonly array $signalsDuringWait = [],
+    ) {
+    }
+
+    /**
      * Drops resources that were closed by whoever owns them, before
      * stream_select() is handed one and raises a TypeError that takes the
      * whole process down.
@@ -150,13 +172,23 @@ final class EventLoop
         // for an event that never happened. Return instead: nothing is
         // ready, the caller ticks again, and the loop keeps one contract -
         // a handler runs only for a resource stream_select reported ready.
-        if ($timeoutSeconds === null) {
-            $ready = @stream_select($read, $write, $except, null);
-        } else {
-            $seconds = (int) $timeoutSeconds;
-            $microseconds = (int) (($timeoutSeconds - $seconds) * 1_000_000);
+        $seconds = $timeoutSeconds === null ? null : (int) $timeoutSeconds;
+        $microseconds = $timeoutSeconds === null ? null : (int) (($timeoutSeconds - $seconds) * 1_000_000);
 
-            $ready = @stream_select($read, $write, $except, $seconds, $microseconds);
+        // The window, and nothing but the select inside it: a signal pending
+        // since the last wait is delivered the instant it opens (its handler
+        // runs before the select is even entered), one arriving during the
+        // wait interrupts it, and closing it straight after means no handler
+        // ever runs inside the callbacks below - which are exactly the code
+        // that throws when a peer disappears.
+        if ($this->signalsDuringWait !== []) {
+            pcntl_sigprocmask(SIG_UNBLOCK, $this->signalsDuringWait);
+        }
+
+        $ready = @stream_select($read, $write, $except, $seconds, $microseconds);
+
+        if ($this->signalsDuringWait !== []) {
+            pcntl_sigprocmask(SIG_BLOCK, $this->signalsDuringWait);
         }
 
         if ($ready === false || $ready === 0) {

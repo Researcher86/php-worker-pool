@@ -49,7 +49,8 @@ final class Master
     private const int MAX_TELEMETRY_SLOTS = 1024;
 
     // Every signal registerSignalHandling() installs a handler for - the
-    // set run() keeps blocked until those handlers exist.
+    // set run() keeps blocked for its whole duration, except while the
+    // loop waits in stream_select() (see EventLoop::$signalsDuringWait).
     private const array HANDLED_SIGNALS = [SIGINT, SIGTERM, SIGCHLD, SIGHUP, SIGUSR1];
 
     private bool $running = true;
@@ -171,19 +172,26 @@ final class Master
      */
     public function run(): void
     {
-        // Every signal registerSignalHandling() is about to catch is held
-        // back until it has: SIGTERM, SIGINT and SIGHUP all TERMINATE a
-        // process by default, and from here to the handlers there are forks,
-        // a shared memory segment and a socket file - a shutdown signal in
+        // Every signal registerSignalHandling() is about to catch is blocked
+        // from here until run() returns, and only ever let through while the
+        // loop waits. Two reasons, one per half of run():
+        //
+        // Startup. SIGTERM, SIGINT and SIGHUP all TERMINATE a process by
+        // default, and between here and the handlers there are forks, a
+        // shared memory segment and a socket file - a shutdown signal in
         // that window used to kill the Master outright, leaving all three
-        // behind. Blocked, a signal is not lost, only held pending by the
-        // kernel until a handler exists to receive it. (pcntl_signal() itself
-        // unblocks the signal it installs, so each one is in fact delivered
-        // the moment its own handler goes in; the restore in `finally` is
-        // what covers a startup that throws first.) Workers forked meanwhile
-        // inherit the mask, and ForkedWorkerLauncher resets both handlers and
-        // mask in the child. See docs/DECISIONS.md "Signals during startup,
-        // and pipes nobody reads".
+        // behind. Blocked, it is held pending by the kernel instead, and
+        // handled the moment a handler exists for it.
+        //
+        // The loop. PHP runs a handler between two instructions of whatever
+        // code is executing, and silently drops it if that code is mid-throw
+        // - which the Master's is whenever a worker or a client disappears.
+        // A shutdown signal landing there was simply lost. Taken only inside
+        // the wait, where nothing throws, a signal cannot be.
+        //
+        // Workers forked meanwhile inherit the mask, and ForkedWorkerLauncher
+        // resets both handlers and mask in the child. See docs/DECISIONS.md
+        // "Signals during startup, and pipes nobody reads".
         pcntl_sigprocmask(SIG_BLOCK, self::HANDLED_SIGNALS, $previousMask);
 
         try {
@@ -214,7 +222,9 @@ final class Master
 
                 throw $e;
             }
-            $this->loop = new EventLoop();
+            // The wait inside tick() is the one place the handled signals are
+            // let through - see the comment at the top of run().
+            $this->loop = new EventLoop(signalsDuringWait: self::HANDLED_SIGNALS);
             $this->pendingRequests = new PendingRequestRegistry($this->clock);
             $this->requestMetrics = new RequestMetrics();
 
@@ -242,23 +252,29 @@ final class Master
             );
 
             $this->registerSignalHandling();
-        } finally {
-            // On success: the handlers exist and anything held pending has
-            // run - a SIGTERM that arrived mid-startup has cleared $running
-            // before the loop is ever entered. On failure: the caller gets
-            // its own mask back rather than one with signals it never asked
-            // to block.
+
+            // pcntl_signal() unblocks the signal it installs, so anything held
+            // pending through startup has been handled by now - a SIGTERM that
+            // arrived mid-startup has already cleared $running, and the loop
+            // below is never entered. Block them again for the loop.
+            pcntl_sigprocmask(SIG_BLOCK, self::HANDLED_SIGNALS);
+        } catch (Throwable $e) {
+            // The caller gets its own mask back rather than one with signals
+            // it never asked to block.
             pcntl_sigprocmask(SIG_SETMASK, $previousMask);
+
+            throw $e;
         }
 
         $remaining = 0.0;
 
         try {
             // Accept client connections until a shutdown signal arrives. The
-            // blocking stream_select() inside tick() returns early on a
-            // signal - interrupted (EINTR) if it lands during the wait, or
-            // woken by the self-pipe byte its handler writes if it landed
-            // just before it - which lets the loop check the flag and exit;
+            // blocking stream_select() inside tick() is also the only place
+            // a signal is let through, and returns early on one -
+            // interrupted (EINTR) if it lands during the wait, or woken by
+            // the self-pipe byte its handler writes if it was already
+            // pending - which lets the loop check the flag and exit;
             // and, regardless of a signal, at least once every
             // TIMEOUT_CHECK_INTERVAL_SECONDS, which is what lets requests
             // past their deadline actually get noticed.
@@ -304,6 +320,11 @@ final class Master
             // publish into a segment we're about to hand back to the kernel.
             $telemetry->destroy();
 
+            // Before the pipe closes: anything that arrived during stop() was
+            // held pending, and is delivered right here - to handlers whose
+            // pipe is still open to write their byte into.
+            pcntl_sigprocmask(SIG_SETMASK, $previousMask);
+
             $this->loop->removeReadable($this->signalRead);
             fclose($this->signalRead);
             fclose($this->signalWrite);
@@ -330,12 +351,12 @@ final class Master
      *
      * SIGINT/SIGTERM go through the pipe too ('T'), but for a different
      * reason: there is no work to move out of the handler - stop() setting
-     * one bool is just as safe - only a wake-up to deliver. The flag alone
-     * relied on the signal interrupting stream_select(), and one that
-     * arrived after `while ($this->running)` was checked but before the
-     * select began (the rest of tick() is ordinary PHP code, where an async
-     * handler runs at once) set the flag and then sat out a full
-     * TIMEOUT_CHECK_INTERVAL_SECONDS before anything looked at it. A byte in
+     * one bool is just as safe - only a wake-up to deliver. Handlers run
+     * only inside EventLoop::tick()'s wait (see run()), and a signal that
+     * was held pending since the last one runs its handler the instant the
+     * wait opens - BEFORE stream_select() is entered, so nothing interrupts
+     * the select afterwards. The flag alone would then sit out a full
+     * TIMEOUT_CHECK_INTERVAL_SECONDS before the loop looked at it; a byte in
      * the pipe makes that select return immediately.
      *
      * What this cannot close: PHP runs a handler between VM instructions,
@@ -370,18 +391,31 @@ final class Master
         // PHASES.md Phase 15 - 'C': a worker can die on its own (crash,
         // OOM-kill, ...) without the Dispatcher's read side ever being the
         // first to notice. SIGCHLD catches it either way -> reapCrashedWorkers().
-        pcntl_signal(SIGCHLD, fn () => @fwrite($this->signalWrite, 'C'));
+        pcntl_signal(SIGCHLD, fn () => $this->wake('C'));
 
         // PHASES.md Phase 19 - 'H': replace every worker with a fresh one
         // without dropping a client connection or in-flight request - SIGHUP
         // is the traditional Unix "reload" signal (nginx, php-fpm).
-        pcntl_signal(SIGHUP, fn () => @fwrite($this->signalWrite, 'H'));
+        pcntl_signal(SIGHUP, fn () => $this->wake('H'));
 
         // PHASES.md Phase 17 - 'U': dump the current Metrics snapshot to
         // stdout on demand - `kill -USR1 <pid>` is the usual Unix convention
         // for "report your stats now" (nginx and php-fpm again), and needs
         // no new wire protocol or endpoint.
-        pcntl_signal(SIGUSR1, fn () => @fwrite($this->signalWrite, 'U'));
+        pcntl_signal(SIGUSR1, fn () => $this->wake('U'));
+    }
+
+    /**
+     * The handler side of the self-pipe. The handlers outlive run() - they
+     * stay installed, and a signal sent after it returned still reaches them
+     * - while the pipe does not, and fwrite() on a closed resource throws a
+     * TypeError the `@` cannot suppress. Nothing is left to wake by then.
+     */
+    private function wake(string $byte): void
+    {
+        if (is_resource($this->signalWrite)) {
+            @fwrite($this->signalWrite, $byte);
+        }
     }
 
     /**
@@ -695,6 +729,6 @@ final class Master
     {
         $this->running = false;
 
-        @fwrite($this->signalWrite, 'T');
+        $this->wake('T');
     }
 }

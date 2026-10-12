@@ -53,6 +53,7 @@ one a reader is most likely to act on by mistake.
 | Signals write one byte to a self-pipe; the work happens in the main loop | current, [why](#hardening-the-edges-peers-signals-and-races) |
 | Every handled signal is blocked from the top of `Master::run()` until its handler exists | current, [why](#signals-during-startup-and-pipes-nobody-reads) |
 | SIGINT/SIGTERM set the shutdown flag in the handler AND write `'T'` to the self-pipe to wake the select | current, [why](#signals-during-startup-and-pipes-nobody-reads) |
+| Handled signals are delivered only inside `EventLoop::tick()`'s wait, never while the Master's code runs | current, [why](#signals-during-startup-and-pipes-nobody-reads) |
 | `StderrLogger` writes blocking; draining STDERR is the launcher's job | current, [why](#signals-during-startup-and-pipes-nobody-reads) |
 | `WorkerPool` alone owns lifecycle transitions, and stays whole | current, [why](#failure-semantics-and-invariant-tests) |
 | The state machine is one declarative table, asserted cell by cell | current, [why](#failure-semantics-and-invariant-tests) |
@@ -1307,7 +1308,9 @@ Reported symptom: on CI the Master sometimes "misses" the first SIGTERM,
 and the platform has to send it again. A review of `Master::run()` turned
 up three candidate causes. One was a real bug, one a real but much smaller
 delay, and the third a hazard that - measured - these tests never actually
-reach.
+reach. None of them was the symptom: that turned out to be PHP itself
+dropping the handler call, found by instrumenting the E2E suite, and is
+the fourth section below.
 
 ## A shutdown signal during startup killed the Master outright
 
@@ -1320,8 +1323,8 @@ far) the socket file behind. Not "missed": dead, with nothing cleaned up.
 
 **Chosen:** `run()` blocks every signal it is about to handle
 (`Master::HANDLED_SIGNALS`) with `pcntl_sigprocmask()` before it creates
-anything, and restores the caller's mask in a `finally` once the handlers
-exist. A blocked signal is not lost - the kernel holds it pending - so a
+anything, and keeps them blocked for the rest of run() except inside the
+loop's wait (see "The SIGTERM that was actually lost" below). A blocked signal is not lost - the kernel holds it pending - so a
 SIGTERM sent mid-startup is acted on the moment there is something to act
 on it: `$running` is already false when the loop is reached, and the
 Master goes straight to its ordinary shutdown.
@@ -1340,8 +1343,9 @@ exactly like later ones. Found while testing that: on PHP 8.5,
 `pcntl_signal()` itself unblocks the signal it installs - so in the Master
 each pending signal is in fact delivered as its own handler goes in, and in
 a worker the `SIG_DFL` reset alone already clears SIGTERM from the mask.
-The explicit restore and `SIG_SETMASK` are kept: one covers a startup that
-throws, the other every signal the resets don't name.
+Run() re-blocks them straight after `registerSignalHandling()` for that
+reason, and the worker's explicit `SIG_SETMASK` is kept for every signal
+the resets don't name.
 
 **The test** (`tests/Master/MasterSignalTest.php`) does not race a kill
 against startup from outside. `WorkerPool` stamps a freshly launched worker
@@ -1357,9 +1361,11 @@ socket and the segment's anchor gone, and SIGHUP is just a reload.
 SIGINT/SIGTERM used to set `$running = false` and nothing else, relying on
 the signal interrupting `stream_select()` (EINTR) to get the loop to look
 at it. One that arrived after `while ($this->running)` was checked but
-before the select started - the rest of `EventLoop::tick()` is ordinary PHP
-code, where an async handler runs at once - set the flag and then waited
-out a full `TIMEOUT_CHECK_INTERVAL_SECONDS` (1s) before anything read it.
+before the select started set the flag and then waited out a full
+`TIMEOUT_CHECK_INTERVAL_SECONDS` (1s) before anything read it. With the
+signal window below the case is sharper still: a signal held pending since
+the last wait has its handler run the instant the window opens, BEFORE the
+select is entered - so nothing would interrupt that select at all.
 
 **Chosen:** the handler still sets the flag, and now also writes `'T'` to
 the same self-pipe SIGCHLD, SIGHUP and SIGUSR1 already use, so the select
@@ -1375,9 +1381,58 @@ and so its byte - deferred until select returns. Closing that needs
 `pselect()` or `signalfd()`, neither of which PHP exposes; what is left is
 microseconds wide and still bounded by the 1s tick.
 
-No test for this one: the window is a few PHP statements inside `tick()`
+No test for the byte alone: the gap is a few statements inside `tick()`
 with no seam to stop in, and a timing test that usually lands in it would
 be a flaky test about flakiness. The E2E shutdown tests exercise the path.
+
+## The SIGTERM that was actually lost
+
+With the three fixes above in place, the E2E suite was run in a loop with
+teardown instrumented to report whenever the Master was still alive 5s
+after its SIGTERM. About one `InvariantsTest` run in seven, one was - in
+the crash and vanishing-client tests. In each case `/proc/<pid>/status`
+showed SIGTERM caught (`SigCgt`), nothing pending or blocked, the process
+idle in `pselect6`, and a log line at the top of `stop()` never written:
+the kernel had delivered the signal, and the PHP handler never ran.
+
+The cause is in PHP, not here. With `pcntl_async_signals(true)` the C-level
+handler only queues the signal; `pcntl_signal_dispatch()` calls the PHP
+handler later, between two VM instructions. If an exception is in flight
+at that moment, `zend_call_function()` returns without calling anything
+("we would result in an unstable executor otherwise"), and the dispatch
+loop then discards every other signal queued with it. A standalone probe
+(a child throwing and catching in a loop, sent 200 SIGUSR1s) handled 134
+of them with userland throws and 42 with `json_decode(..., JSON_THROW_ON_ERROR)`;
+without throwing, 200 of 200. The Master throws and catches routinely -
+`ConnectionClosedException` for every worker or client that disappears -
+so any of its signals could vanish, SIGTERM included.
+
+**Chosen:** a signal window. The handled signals stay blocked for all of
+`run()`, and `EventLoop` - given them as `signalsDuringWait` - unblocks
+them only around its `stream_select()` call and blocks them again the
+moment it returns: a `pselect()` assembled from what PHP exposes. Inside
+the wait nothing is throwing, so a handler runs where it cannot be
+dropped; a signal sent at any other moment stays pending in the kernel,
+which cannot lose it, until the next wait - at most one tick away. The
+handlers themselves are unchanged; only where they may run is.
+
+**Rejected:** taking SIGTERM/SIGINT with `pcntl_sigtimedwait()` once per
+tick and no handler at all. Equally lossless, but a blocked signal never
+interrupts the select, so shutdown would wait out the rest of the tick
+every time.
+
+**The test** (`MasterSignalTest::testTheMainLoopRunsItsOwnCodeWithShutdownSignalsBlocked`)
+asserts the property rather than racing the bug: the Clock is read all
+through the loop's own code, so a probe Clock records whether SIGTERM was
+deliverable at each reading. Before the change, 16 of 18 readings were;
+after it, none, and the SIGTERM sent afterwards still ends the Master.
+`EventLoopTest::testSignalsAreDeliveredOnlyWhileTickWaits` pins the window
+itself. Measured: 30 consecutive runs of the whole E2E suite with the
+escalation check, 0 escalations (from roughly one in seven before).
+
+Still open: the microseconds-wide C-level gap before the `select()`
+syscall described in the previous section, which delays a signal by at
+most one tick but cannot lose it.
 
 ## Pipes nobody reads
 
