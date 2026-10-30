@@ -109,6 +109,33 @@ final class EventLoopTest extends TestCase
         $this->assertSame(['a', 'b'], $calledFor);
     }
 
+    /**
+     * The SIGHUP crash: the signal pipe's handler runs reload(), which closes
+     * an idle worker's socket that the same select already reported ready
+     * (its READY just arrived). Its handler must not run on a closed stream.
+     */
+    public function testAHandlerIsSkippedWhenAnEarlierHandlerInTheSameTickClosedItsResource(): void
+    {
+        [$readA, $writeA] = $this->pair();
+        [$readB, $writeB] = $this->pair();
+
+        $calledFor = [];
+        $this->loop->addReadable($readA, function () use (&$calledFor, $readB): void {
+            $calledFor[] = 'a';
+            fclose($readB);
+        });
+        $this->loop->addReadable($readB, function () use (&$calledFor, $readB): void {
+            $calledFor[] = 'b';
+            fread($readB, 8192);
+        });
+
+        fwrite($writeA, 'x');
+        fwrite($writeB, 'y');
+        $this->loop->tick();
+
+        $this->assertSame(['a'], $calledFor);
+    }
+
     public function testRemoveReadableStopsInvokingHandler(): void
     {
         [$readA, $writeA] = $this->pair();

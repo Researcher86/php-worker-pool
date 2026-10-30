@@ -196,11 +196,15 @@ final class EventLoop
         }
 
         // stream_select() rewrote $read/$write in place to keep only the
-        // resources that are actually ready.
+        // resources that are actually ready. A handler earlier in this pass
+        // may have closed one of the later ones - the signal pipe's reload()
+        // retiring an idle worker whose READY arrived in the same select - so
+        // a resource that is no longer open is skipped, not handed to its
+        // handler; forgetClosedResources() drops it on the next tick.
         foreach ($read as $resource) {
             $id = (int) $resource;
 
-            if (isset($this->readHandlers[$id])) {
+            if (is_resource($resource) && isset($this->readHandlers[$id])) {
                 ($this->readHandlers[$id])();
             }
         }
@@ -208,7 +212,7 @@ final class EventLoop
         foreach ($write as $resource) {
             $id = (int) $resource;
 
-            if (isset($this->writeHandlers[$id])) {
+            if (is_resource($resource) && isset($this->writeHandlers[$id])) {
                 ($this->writeHandlers[$id])();
             }
         }
